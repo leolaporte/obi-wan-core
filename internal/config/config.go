@@ -30,6 +30,10 @@ type Channel struct {
 	WebhookPort    int    `yaml:"webhook_port,omitempty"`
 	WebhookKeyEnv  string `yaml:"webhook_key_env,omitempty"`
 	WatchChatIDEnv string `yaml:"watch_chat_id_env,omitempty"`
+
+	// R1 shim
+	BootstrapTokenEnv string `yaml:"bootstrap_token_env,omitempty"`
+	DeviceStatePath   string `yaml:"device_state_path,omitempty"`
 }
 
 // Load reads a YAML config file and validates required fields.

@@ -146,3 +146,26 @@ channels:
 	require.Error(t, err, "negative concurrency should be rejected")
 	require.Contains(t, err.Error(), "concurrency")
 }
+
+func TestLoad_R1Channel(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "claude_binary: /bin/true\n" +
+		"state_dir: " + dir + "\n" +
+		"channels:\n" +
+		"  r1:\n" +
+		"    enabled: true\n" +
+		"    webhook_port: 18789\n" +
+		"    bootstrap_token_env: R1_BOOTSTRAP_TOKEN\n" +
+		"    device_state_path: " + dir + "/r1-devices.json\n"
+	require.NoError(t, os.WriteFile(path, []byte(body), 0600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	ch, ok := cfg.Channels["r1"]
+	require.True(t, ok, "r1 channel must exist")
+	require.True(t, ch.Enabled)
+	require.Equal(t, 18789, ch.WebhookPort)
+	require.Equal(t, "R1_BOOTSTRAP_TOKEN", ch.BootstrapTokenEnv)
+	require.Equal(t, dir+"/r1-devices.json", ch.DeviceStatePath)
+}

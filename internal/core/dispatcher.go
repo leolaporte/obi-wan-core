@@ -54,14 +54,18 @@ func (d *Dispatcher) Dispatch(ctx context.Context, turn Turn) (*Reply, error) {
 		return nil, ErrAccessDenied
 	}
 
+	slog.Info("dispatch: acquiring semaphore", "channel", turn.Channel)
 	select {
 	case d.sem <- struct{}{}:
+		slog.Info("dispatch: semaphore acquired", "channel", turn.Channel)
 	case <-ctx.Done():
+		slog.Warn("dispatch: context cancelled waiting for semaphore", "channel", turn.Channel)
 		return nil, ctx.Err()
 	}
 	defer func() { <-d.sem }()
 
 	sid, fresh := d.sessions.LoadOrCreate(turn.Channel)
+	slog.Info("dispatch: session loaded", "channel", turn.Channel, "sid", sid, "fresh", fresh)
 
 	mem, err := d.memory.Load(turn.Channel)
 	if err != nil {
@@ -79,12 +83,14 @@ func (d *Dispatcher) Dispatch(ctx context.Context, turn Turn) (*Reply, error) {
 
 	combined := combineSystemPrompt(sysPrompt, mem)
 
+	slog.Info("dispatch: calling claude.Run", "channel", turn.Channel, "sid", sid, "fresh", fresh)
 	result, err := d.claude.Run(ctx, RunArgs{
 		Message:      turn.Message,
 		SessionID:    sid,
 		IsNewSession: fresh,
 		SystemPrompt: combined,
 	})
+	slog.Info("dispatch: claude.Run returned", "channel", turn.Channel, "err", err, "sessionError", result != nil && result.SessionError)
 	if err != nil {
 		return nil, err
 	}
