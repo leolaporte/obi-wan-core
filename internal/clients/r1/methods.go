@@ -3,18 +3,23 @@ package r1
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"time"
 
 	"github.com/leolaporte/obi-wan-core/internal/core"
 )
 
+// EventPusher is a callback the method handler uses to push async events
+// (like chat responses) back to the connected client after the initial
+// ACK response has been sent.
+type EventPusher func(event string, payload any)
+
 // MethodHandlerConfig is the per-connection context for method dispatch.
 type MethodHandlerConfig struct {
 	Dispatcher Dispatcher
 	Channel    string // "r1"
 	DeviceID   string // stable id for Turn.UserID and node.pending.pull responses
+	PushEvent  EventPusher
 }
 
 // MethodHandler routes request frames to the right per-method logic.
@@ -60,8 +65,10 @@ func (m *MethodHandler) Handle(ctx context.Context, method string, params json.R
 // about. The R1 sends "message" (not "text") with a sessionKey and
 // idempotencyKey. We accept both field names for flexibility.
 type sendParams struct {
-	Text    string `json:"text"`
-	Message string `json:"message"`
+	Text           string `json:"text"`
+	Message        string `json:"message"`
+	SessionKey     string `json:"sessionKey"`
+	IdempotencyKey string `json:"idempotencyKey"`
 }
 
 type sendResponse struct {
@@ -81,29 +88,60 @@ func (m *MethodHandler) handleSend(ctx context.Context, raw json.RawMessage) (js
 	if text == "" {
 		return nil, &ErrorShape{Code: ErrCodeInvalidRequest, Message: "text required"}
 	}
-	// Use a detached context with a generous timeout for the dispatch.
-	// The R1 may disconnect before claude -p finishes; if we used the
-	// connection's context, exec.CommandContext would kill the subprocess.
-	// A 2-minute timeout is enough for even cold-start dispatches.
-	dispatchCtx, dispatchCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer dispatchCancel()
-	reply, err := m.cfg.Dispatcher.Dispatch(dispatchCtx, core.Turn{
-		Channel:    m.cfg.Channel,
-		UserID:     m.cfg.DeviceID,
-		Message:    text,
-		ReceivedAt: time.Now(),
+
+	// OpenClaw's chat.send returns an immediate ACK with {runId, status}
+	// and then pushes the actual response as async "chat" events.
+	// The R1 expects this pattern — it won't display anything from the
+	// synchronous res payload.
+	runID := p.IdempotencyKey
+	if runID == "" {
+		runID = "run-" + text[:min(len(text), 8)]
+	}
+	sessionKey := p.SessionKey
+	if sessionKey == "" {
+		sessionKey = "main"
+	}
+
+	// Dispatch claude -p in the background; push "chat" events when done.
+	go func() {
+		dispatchCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		reply, err := m.cfg.Dispatcher.Dispatch(dispatchCtx, core.Turn{
+			Channel:    m.cfg.Channel,
+			UserID:     m.cfg.DeviceID,
+			Message:    text,
+			ReceivedAt: time.Now(),
+		})
+		if err != nil {
+			m.cfg.PushEvent("chat", map[string]any{
+				"runId":        runID,
+				"sessionKey":   sessionKey,
+				"seq":          1,
+				"state":        "error",
+				"errorMessage": err.Error(),
+			})
+			return
+		}
+		m.cfg.PushEvent("chat", map[string]any{
+			"runId":      runID,
+			"sessionKey": sessionKey,
+			"seq":        0,
+			"state":      "final",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": reply.Text},
+				},
+			},
+		})
+	}()
+
+	// Return the immediate ACK.
+	ack, _ := json.Marshal(map[string]any{
+		"runId":  runID,
+		"status": "started",
 	})
-	if errors.Is(err, core.ErrAccessDenied) {
-		return nil, &ErrorShape{Code: ErrCodeUnauthorized, Message: "access denied"}
-	}
-	if err != nil {
-		return nil, &ErrorShape{Code: ErrCodeInternal, Message: err.Error()}
-	}
-	buf, err := json.Marshal(sendResponse{Text: reply.Text})
-	if err != nil {
-		return nil, &ErrorShape{Code: ErrCodeInternal, Message: err.Error()}
-	}
-	return buf, nil
+	return ack, nil
 }
 
 // nodePendingResponse matches openclaw's server-methods/nodes.ts:814-827.

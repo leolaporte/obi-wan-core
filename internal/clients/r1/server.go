@@ -244,6 +244,14 @@ func (s *Server) serveConnection(ctx context.Context, c *websocket.Conn, connID 
 		Dispatcher: s.dispatcher,
 		Channel:    s.cfg.Channel,
 		DeviceID:   deviceID,
+		PushEvent: func(event string, payload any) {
+			_ = wsjson.Write(ctx, c, Frame{
+				Type:    FrameTypeEvent,
+				Event:   event,
+				Payload: rawJSON(payload),
+			})
+			slog.Info("r1 async event pushed", "connId", connID, "event", event)
+		},
 	})
 
 	// Start the tick loop.
@@ -302,27 +310,6 @@ func (s *Server) serveConnection(ctx context.Context, c *websocket.Conn, connID 
 			return err
 		}
 		slog.Info("r1 response sent", "connId", connID, "id", f.ID)
-
-		// Also push the response as a chat event — the R1 may expect
-		// streaming chat events rather than (or in addition to) the
-		// synchronous res frame.
-		if f.Method == MethodChatSend || f.Method == MethodSessionsSend {
-			var textPayload struct{ Text string `json:"text"` }
-			_ = json.Unmarshal(payload, &textPayload)
-			if textPayload.Text != "" {
-				chatEvent := rawJSON(map[string]any{
-					"type":    "assistant",
-					"content": textPayload.Text,
-					"done":    true,
-				})
-				_ = wsjson.Write(ctx, c, Frame{
-					Type:    FrameTypeEvent,
-					Event:   "chat",
-					Payload: chatEvent,
-				})
-				slog.Info("r1 chat event pushed", "connId", connID)
-			}
-		}
 	}
 }
 
