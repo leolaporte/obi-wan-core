@@ -158,8 +158,13 @@ func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serveConnection(ctx context.Context, c *websocket.Conn, connID string) error {
 	nonce := randomHex(16)
 
+	// Handshake phase — timeout to prevent hung connections from locking
+	// out the real R1 indefinitely.
+	hsCtx, hsCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer hsCancel()
+
 	// Emit connect.challenge.
-	if err := wsjson.Write(ctx, c, Frame{
+	if err := wsjson.Write(hsCtx, c, Frame{
 		Type:    FrameTypeEvent,
 		Event:   EventConnectChallenge,
 		Payload: rawJSON(map[string]any{"nonce": nonce, "ts": time.Now().UnixMilli()}),
@@ -169,11 +174,11 @@ func (s *Server) serveConnection(ctx context.Context, c *websocket.Conn, connID 
 
 	// Read first frame: must be req connect.
 	var first Frame
-	if err := wsjson.Read(ctx, c, &first); err != nil {
+	if err := wsjson.Read(hsCtx, c, &first); err != nil {
 		return fmt.Errorf("read connect: %w", err)
 	}
 	if first.Type != FrameTypeReq || first.Method != MethodConnect {
-		return writeError(ctx, c, first.ID, ErrCodeInvalidRequest, "first frame must be req connect")
+		return writeError(hsCtx, c, first.ID, ErrCodeInvalidRequest, "first frame must be req connect")
 	}
 
 	h := NewHandshake(HandshakeConfig{
@@ -183,7 +188,8 @@ func (s *Server) serveConnection(ctx context.Context, c *websocket.Conn, connID 
 	})
 	hello, errShape := h.Handle(first.Params)
 	if errShape != nil {
-		return writeErrorShape(ctx, c, first.ID, errShape)
+		slog.Warn("r1 handshake rejected", "connId", connID, "code", errShape.Code, "msg", errShape.Message)
+		return writeErrorShape(hsCtx, c, first.ID, errShape)
 	}
 	hello.Server.ConnID = connID
 
@@ -192,7 +198,7 @@ func (s *Server) serveConnection(ctx context.Context, c *websocket.Conn, connID 
 		return fmt.Errorf("marshal hello: %w", err)
 	}
 	ok := true
-	if err := wsjson.Write(ctx, c, Frame{
+	if err := wsjson.Write(hsCtx, c, Frame{
 		Type:    FrameTypeRes,
 		ID:      first.ID,
 		OK:      &ok,
@@ -200,6 +206,16 @@ func (s *Server) serveConnection(ctx context.Context, c *websocket.Conn, connID 
 	}); err != nil {
 		return fmt.Errorf("send hello: %w", err)
 	}
+
+	// Push voicewake.changed with empty triggers immediately after HelloOk,
+	// matching OpenClaw's node-connect behavior (recon §5.3 point 4).
+	// If the R1 gates on this event before sending transcripts, omitting
+	// it would silently stall the connection.
+	_ = wsjson.Write(ctx, c, Frame{
+		Type:    FrameTypeEvent,
+		Event:   EventVoicewakeChanged,
+		Payload: rawJSON(map[string]any{"triggers": []any{}}),
+	})
 
 	// Now in "connected" state. Resolve the authoritative deviceID for
 	// method dispatch: signed device.id from the handshake.
@@ -212,6 +228,7 @@ func (s *Server) serveConnection(ctx context.Context, c *websocket.Conn, connID 
 	if deviceID == "" {
 		deviceID = params.Client.ID
 	}
+	slog.Info("r1 handshake complete", "connId", connID, "deviceId", deviceID)
 
 	methods := NewMethodHandler(MethodHandlerConfig{
 		Dispatcher: s.dispatcher,

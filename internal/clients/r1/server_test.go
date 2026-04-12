@@ -127,6 +127,16 @@ func TestServer_FullHandshakeAndSend(t *testing.T) {
 		t.Error("expected HelloOk.auth.deviceToken")
 	}
 
+	// Expect voicewake.changed event pushed immediately after HelloOk
+	// (matches OpenClaw node-connect behavior, recon §5.3 point 4).
+	var vwFrame Frame
+	if err := wsjson.Read(ctx, c, &vwFrame); err != nil {
+		t.Fatalf("read voicewake.changed: %v", err)
+	}
+	if vwFrame.Type != FrameTypeEvent || vwFrame.Event != EventVoicewakeChanged {
+		t.Fatalf("expected voicewake.changed event, got: %+v", vwFrame)
+	}
+
 	// Send a chat via sessions.send.
 	sendParams, _ := json.Marshal(map[string]any{"text": "ping"})
 	if err := wsjson.Write(ctx, c, Frame{
