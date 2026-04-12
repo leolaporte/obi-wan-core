@@ -275,8 +275,10 @@ func (s *Server) serveConnection(ctx context.Context, c *websocket.Conn, connID 
 	for {
 		var f Frame
 		if err := wsjson.Read(ctx, c, &f); err != nil {
+			slog.Info("r1 read ended", "connId", connID, "error", err)
 			return nil // normal close path
 		}
+		slog.Info("r1 frame received", "connId", connID, "type", f.Type, "method", f.Method, "id", f.ID, "event", f.Event, "raw", string(f.Params))
 		if f.Type != FrameTypeReq {
 			// Post-handshake the server only accepts req frames.
 			continue
@@ -289,13 +291,37 @@ func (s *Server) serveConnection(ctx context.Context, c *websocket.Conn, connID 
 			continue
 		}
 		ok := true
+		slog.Info("r1 sending response", "connId", connID, "method", f.Method, "id", f.ID, "payload", string(payload))
 		if err := wsjson.Write(ctx, c, Frame{
 			Type:    FrameTypeRes,
 			ID:      f.ID,
 			OK:      &ok,
 			Payload: payload,
 		}); err != nil {
+			slog.Warn("r1 response write failed", "connId", connID, "error", err)
 			return err
+		}
+		slog.Info("r1 response sent", "connId", connID, "id", f.ID)
+
+		// Also push the response as a chat event — the R1 may expect
+		// streaming chat events rather than (or in addition to) the
+		// synchronous res frame.
+		if f.Method == MethodChatSend || f.Method == MethodSessionsSend {
+			var textPayload struct{ Text string `json:"text"` }
+			_ = json.Unmarshal(payload, &textPayload)
+			if textPayload.Text != "" {
+				chatEvent := rawJSON(map[string]any{
+					"type":    "assistant",
+					"content": textPayload.Text,
+					"done":    true,
+				})
+				_ = wsjson.Write(ctx, c, Frame{
+					Type:    FrameTypeEvent,
+					Event:   "chat",
+					Payload: chatEvent,
+				})
+				slog.Info("r1 chat event pushed", "connId", connID)
+			}
 		}
 	}
 }

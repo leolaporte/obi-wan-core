@@ -57,9 +57,11 @@ func (m *MethodHandler) Handle(ctx context.Context, method string, params json.R
 }
 
 // sendParams is the narrow view of sessions.send / chat.send the shim cares
-// about. We treat the R1 as a simple "text in, text out" client for now.
+// about. The R1 sends "message" (not "text") with a sessionKey and
+// idempotencyKey. We accept both field names for flexibility.
 type sendParams struct {
-	Text string `json:"text"`
+	Text    string `json:"text"`
+	Message string `json:"message"`
 }
 
 type sendResponse struct {
@@ -71,11 +73,21 @@ func (m *MethodHandler) handleSend(ctx context.Context, raw json.RawMessage) (js
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, &ErrorShape{Code: ErrCodeInvalidRequest, Message: "bad send params: " + err.Error()}
 	}
-	text := strings.TrimSpace(p.Text)
+	// R1 sends "message", OpenClaw webchat sends "text". Accept both.
+	text := strings.TrimSpace(p.Message)
+	if text == "" {
+		text = strings.TrimSpace(p.Text)
+	}
 	if text == "" {
 		return nil, &ErrorShape{Code: ErrCodeInvalidRequest, Message: "text required"}
 	}
-	reply, err := m.cfg.Dispatcher.Dispatch(ctx, core.Turn{
+	// Use a detached context with a generous timeout for the dispatch.
+	// The R1 may disconnect before claude -p finishes; if we used the
+	// connection's context, exec.CommandContext would kill the subprocess.
+	// A 2-minute timeout is enough for even cold-start dispatches.
+	dispatchCtx, dispatchCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer dispatchCancel()
+	reply, err := m.cfg.Dispatcher.Dispatch(dispatchCtx, core.Turn{
 		Channel:    m.cfg.Channel,
 		UserID:     m.cfg.DeviceID,
 		Message:    text,
