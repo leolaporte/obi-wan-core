@@ -8,8 +8,7 @@ StartLimitBurst=3
 
 [Service]
 Type=simple
-# Plan 2/3 will add EnvironmentFile lines for sops-managed secrets
-# (TELEGRAM_BOT_TOKEN, WEBHOOK_KEY, etc.) as their clients need them.
+EnvironmentFile=%t/secrets/telegram.env
 Environment="PATH=/home/leo/.local/bin:/home/leo/.bun/bin:/usr/local/bin:/usr/bin"
 ExecStart=/home/leo/.local/bin/obi-wan-core serve
 Restart=on-failure
