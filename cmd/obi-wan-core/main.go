@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/leolaporte/obi-wan-core/internal/clients/r1"
 	"github.com/leolaporte/obi-wan-core/internal/clients/telegram"
 	"github.com/leolaporte/obi-wan-core/internal/clients/watch"
 	"github.com/leolaporte/obi-wan-core/internal/config"
@@ -114,6 +115,37 @@ func runServe(args []string) error {
 			}
 		}()
 		slog.Info("watch server launched", "port", ch.WebhookPort)
+	}
+
+	if ch, ok := cfg.Channels["r1"]; ok && ch.Enabled {
+		if ch.BootstrapTokenEnv == "" {
+			return fmt.Errorf("r1 enabled but bootstrap_token_env is empty")
+		}
+		bootstrap := os.Getenv(ch.BootstrapTokenEnv)
+		if bootstrap == "" {
+			return fmt.Errorf("r1 enabled but %s is empty", ch.BootstrapTokenEnv)
+		}
+		statePath := ch.DeviceStatePath
+		if statePath == "" {
+			statePath = filepath.Join(cfg.StateDir, "r1-devices.json")
+		}
+		r1Srv, err := r1.NewServer(r1.Config{
+			Port:           ch.WebhookPort,
+			BootstrapToken: bootstrap,
+			Channel:        "r1",
+			StatePath:      statePath,
+		}, d)
+		if err != nil {
+			return fmt.Errorf("r1 server: %w", err)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := r1Srv.Start(ctx); err != nil {
+				slog.Error("r1 server stopped", "error", err)
+			}
+		}()
+		slog.Info("r1 gateway launched", "port", ch.WebhookPort)
 	}
 
 	<-ctx.Done()
