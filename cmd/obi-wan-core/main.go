@@ -61,6 +61,8 @@ func runServe(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	var wg sync.WaitGroup
+
 	var tgClient *telegram.Client
 	if ch, ok := cfg.Channels["telegram"]; ok && ch.Enabled {
 		token := os.Getenv(ch.BotTokenEnv)
@@ -74,11 +76,14 @@ func runServe(args []string) error {
 		if err != nil {
 			return fmt.Errorf("telegram client: %w", err)
 		}
-		go tgClient.Start(ctx)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tgClient.Start(ctx)
+		}()
 		slog.Info("telegram client launched")
 	}
 
-	var wg sync.WaitGroup
 	if ch, ok := cfg.Channels["watch"]; ok && ch.Enabled {
 		key := os.Getenv(ch.WebhookKeyEnv)
 		if key == "" {
@@ -87,6 +92,12 @@ func runServe(args []string) error {
 		var echo watch.Echo = watch.NoOpEcho{}
 		if chatID := os.Getenv(ch.WatchChatIDEnv); chatID != "" && tgClient != nil {
 			echo = &telegramEcho{client: tgClient, chatID: chatID}
+			slog.Info("watch echo wired to telegram", "chatID", chatID)
+		} else if ch.WatchChatIDEnv != "" {
+			slog.Info("watch echo disabled",
+				"reason", "env var empty or telegram not configured",
+				"env", ch.WatchChatIDEnv,
+			)
 		}
 		srv := watch.NewServer(watch.Config{
 			Port:       ch.WebhookPort,

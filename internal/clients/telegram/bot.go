@@ -40,6 +40,7 @@ func New(cfg Config, d Dispatcher) (*Client, error) {
 	b, err := bot.New(cfg.BotToken,
 		bot.WithDefaultHandler(c.onUpdate),
 		bot.WithAllowedUpdates(bot.AllowedUpdates{"message"}),
+		bot.WithSkipGetMe(),
 	)
 	if err != nil {
 		return nil, err
