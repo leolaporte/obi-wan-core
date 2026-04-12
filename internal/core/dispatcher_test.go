@@ -91,6 +91,55 @@ func TestDispatcher_memoryInjectedIntoSystemPrompt(t *testing.T) {
 	require.Equal(t, "ok", reply.Text)
 }
 
+func TestDispatcher_systemPromptFileCombinesWithMemory(t *testing.T) {
+	bin := mockClaudeScript(t, `{"result":"ok"}`, "", 0)
+
+	stateDir := t.TempDir()
+	memDir := t.TempDir()
+
+	// Write system prompt file.
+	sysPromptPath := filepath.Join(t.TempDir(), "sys.md")
+	require.NoError(t, os.WriteFile(sysPromptPath, []byte("You are a helpful assistant."), 0600))
+
+	// Write memory file under memDir/telegram/memory.md.
+	chanDir := filepath.Join(memDir, "telegram")
+	require.NoError(t, os.MkdirAll(chanDir, 0700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(chanDir, "memory.md"),
+		[]byte("Leo likes tea."),
+		0600,
+	))
+
+	cfg := &config.Config{
+		ClaudeBinary: bin,
+		StateDir:     stateDir,
+		Concurrency:  2,
+		Channels: map[string]config.Channel{
+			"telegram": {
+				Enabled:          true,
+				AllowFrom:        []string{"alice"},
+				SystemPromptFile: sysPromptPath,
+			},
+		},
+	}
+	sessions, err := NewSessionStore(stateDir)
+	require.NoError(t, err)
+	d := NewDispatcher(cfg, NewAccess(cfg), sessions, memory.NewLoader(memDir), NewClaudeRunner(bin, "sonnet"))
+
+	reply, err := d.Dispatch(context.Background(), Turn{
+		Channel: "telegram", UserID: "alice", Message: "hi",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "ok", reply.Text)
+}
+
+func TestDispatcher_combineSystemPrompt_unit(t *testing.T) {
+	require.Equal(t, "sys\n\nmem", combineSystemPrompt("sys", "mem"))
+	require.Equal(t, "sys", combineSystemPrompt("sys", ""))
+	require.Equal(t, "mem", combineSystemPrompt("", "mem"))
+	require.Equal(t, "", combineSystemPrompt("", ""))
+}
+
 func TestDispatcher_concurrencyCapSerializes(t *testing.T) {
 	// Mock claude that sleeps for 150ms so we can observe serialization.
 	dir := t.TempDir()

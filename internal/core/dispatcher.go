@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 
 	"github.com/leolaporte/obi-wan-core/internal/config"
 	"github.com/leolaporte/obi-wan-core/internal/memory"
@@ -70,11 +71,27 @@ func (d *Dispatcher) Dispatch(ctx context.Context, turn Turn) (*Reply, error) {
 		mem = ""
 	}
 
+	var sysPrompt string
+	if path := d.cfg.Channels[turn.Channel].SystemPromptFile; path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			slog.Warn("system prompt file load failed; continuing without",
+				"channel", turn.Channel,
+				"path", path,
+				"error", err,
+			)
+		} else {
+			sysPrompt = string(data)
+		}
+	}
+
+	combined := combineSystemPrompt(sysPrompt, mem)
+
 	result, err := d.claude.Run(ctx, RunArgs{
 		Message:      turn.Message,
 		SessionID:    sid,
 		IsNewSession: fresh,
-		SystemPrompt: mem,
+		SystemPrompt: combined,
 	})
 	if err != nil {
 		return nil, err
@@ -88,7 +105,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, turn Turn) (*Reply, error) {
 			Message:      turn.Message,
 			SessionID:    newSID,
 			IsNewSession: true,
-			SystemPrompt: mem,
+			SystemPrompt: combined,
 		})
 		if err != nil {
 			return nil, err
@@ -101,4 +118,19 @@ func (d *Dispatcher) Dispatch(ctx context.Context, turn Turn) (*Reply, error) {
 	}
 
 	return &Reply{Text: result.Text}, nil
+}
+
+// combineSystemPrompt joins an optional system prompt and memory block
+// with a paragraph break. Empty inputs are skipped.
+func combineSystemPrompt(sysPrompt, mem string) string {
+	switch {
+	case sysPrompt == "" && mem == "":
+		return ""
+	case sysPrompt == "":
+		return mem
+	case mem == "":
+		return sysPrompt
+	default:
+		return sysPrompt + "\n\n" + mem
+	}
 }
