@@ -86,6 +86,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, turn Turn) (*Reply, error) {
 	slog.Info("dispatch: calling claude.Run", "channel", turn.Channel, "sid", sid, "fresh", fresh)
 	result, err := d.claude.Run(ctx, RunArgs{
 		Message:      turn.Message,
+		Channel:      turn.Channel,
 		SessionID:    sid,
 		IsNewSession: fresh,
 		SystemPrompt: combined,
@@ -101,6 +102,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, turn Turn) (*Reply, error) {
 		newSID := d.sessions.Rotate(turn.Channel)
 		result, err = d.claude.Run(ctx, RunArgs{
 			Message:      turn.Message,
+			Channel:      turn.Channel,
 			SessionID:    newSID,
 			IsNewSession: true,
 			SystemPrompt: combined,

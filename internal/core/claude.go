@@ -28,6 +28,7 @@ func NewClaudeRunner(binary, model string) *ClaudeRunner {
 // RunArgs bundles per-call parameters.
 type RunArgs struct {
 	Message      string
+	Channel      string // "telegram" | "watch" | "r1"
 	SessionID    string
 	IsNewSession bool   // true → --session-id, false → --resume
 	SystemPrompt string // optional --append-system-prompt content
@@ -49,10 +50,11 @@ func (r *ClaudeRunner) Run(ctx context.Context, args RunArgs) (*RunResult, error
 		sessionFlag = "--session-id"
 	}
 
-	// Inject current date/time so resumed sessions don't reuse stale dates.
+	// Inject current date/time and message source so resumed sessions
+	// don't reuse stale dates and Claude can tailor responses by channel.
 	now := time.Now().In(mustLoadLA())
-	dated := fmt.Sprintf("[Current time: %s]\n\n%s",
-		now.Format("Monday, January 2, 2006 3:04 PM"), args.Message)
+	dated := fmt.Sprintf("[Current time: %s | Source: %s]\n\n%s",
+		now.Format("Monday, January 2, 2006 3:04 PM"), args.Channel, args.Message)
 
 	cmdArgs := []string{
 		"-p",
