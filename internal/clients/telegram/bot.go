@@ -134,6 +134,27 @@ func replyParamsFor(i, msgID int) *models.ReplyParameters {
 	return &models.ReplyParameters{MessageID: msgID}
 }
 
+// SendToChat sends a plain text message to an arbitrary chat ID (used by
+// the watch echo adapter to mirror Watch replies into Leo's Telegram DM).
+// Long messages are chunked. Errors are logged and swallowed — Echo is a
+// best-effort sidecar.
+func (c *Client) SendToChat(ctx context.Context, chatID, text string) {
+	id, err := strconv.ParseInt(chatID, 10, 64)
+	if err != nil {
+		slog.Warn("invalid chat id", "chatID", chatID, "error", err)
+		return
+	}
+	for _, chunk := range Chunk(text) {
+		if _, err := c.bot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: id,
+			Text:   chunk,
+		}); err != nil {
+			slog.Warn("echo send failed", "error", err)
+			return
+		}
+	}
+}
+
 // startTypingLoop emits a typing chat action immediately, then again every
 // 4 seconds until the returned stop function is called.
 func (c *Client) startTypingLoop(ctx context.Context, chatID int64) func() {

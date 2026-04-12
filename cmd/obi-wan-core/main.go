@@ -9,9 +9,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/leolaporte/obi-wan-core/internal/clients/telegram"
+	"github.com/leolaporte/obi-wan-core/internal/clients/watch"
 	"github.com/leolaporte/obi-wan-core/internal/config"
 	"github.com/leolaporte/obi-wan-core/internal/core"
 	"github.com/leolaporte/obi-wan-core/internal/memory"
@@ -50,23 +53,73 @@ func runServe(args []string) error {
 	configPath := fs.String("config", defaultConfigPath, "path to config.yaml")
 	_ = fs.Parse(args)
 
-	d, err := buildDispatcher(expandHome(*configPath))
+	d, cfg, err := buildDispatcherWithConfig(expandHome(*configPath))
 	if err != nil {
 		return err
 	}
 
-	slog.Info("obi-wan-core starting in serve mode",
-		"clients", "none yet (Plan 2/3 wiring)",
-	)
-
-	// Plan 1 serve mode: just wait for signal. Plan 2/3 will launch the
-	// Telegram bot, webhook server, and R1 WebSocket server here.
-	_ = d
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	var tgClient *telegram.Client
+	if ch, ok := cfg.Channels["telegram"]; ok && ch.Enabled {
+		token := os.Getenv(ch.BotTokenEnv)
+		if token == "" {
+			return fmt.Errorf("telegram enabled but %s is empty", ch.BotTokenEnv)
+		}
+		tgClient, err = telegram.New(telegram.Config{
+			BotToken: token,
+			Channel:  "telegram",
+		}, d)
+		if err != nil {
+			return fmt.Errorf("telegram client: %w", err)
+		}
+		go tgClient.Start(ctx)
+		slog.Info("telegram client launched")
+	}
+
+	var wg sync.WaitGroup
+	if ch, ok := cfg.Channels["watch"]; ok && ch.Enabled {
+		key := os.Getenv(ch.WebhookKeyEnv)
+		if key == "" {
+			return fmt.Errorf("watch enabled but %s is empty", ch.WebhookKeyEnv)
+		}
+		var echo watch.Echo = watch.NoOpEcho{}
+		if chatID := os.Getenv(ch.WatchChatIDEnv); chatID != "" && tgClient != nil {
+			echo = &telegramEcho{client: tgClient, chatID: chatID}
+		}
+		srv := watch.NewServer(watch.Config{
+			Port:       ch.WebhookPort,
+			WebhookKey: key,
+			Channel:    "watch",
+			UserLabel:  "watch",
+		}, d, echo)
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := srv.Start(ctx); err != nil {
+				slog.Error("watch server stopped", "error", err)
+			}
+		}()
+		slog.Info("watch server launched", "port", ch.WebhookPort)
+	}
+
 	<-ctx.Done()
 	slog.Info("obi-wan-core shutting down")
+	wg.Wait()
 	return nil
+}
+
+// telegramEcho adapts a telegram Client to the watch.Echo interface so
+// Watch replies are mirrored into Leo's Telegram DM.
+type telegramEcho struct {
+	client *telegram.Client
+	chatID string
+}
+
+func (t *telegramEcho) Echo(ctx context.Context, text string) {
+	t.client.SendToChat(ctx, t.chatID, text)
 }
 
 func runDispatch(args []string) error {
@@ -103,15 +156,15 @@ func runDispatch(args []string) error {
 	return nil
 }
 
-func buildDispatcher(cfgPath string) (*core.Dispatcher, error) {
+func buildDispatcherWithConfig(cfgPath string) (*core.Dispatcher, *config.Config, error) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		return nil, fmt.Errorf("load config: %w", err)
+		return nil, nil, fmt.Errorf("load config: %w", err)
 	}
 
 	sessions, err := core.NewSessionStore(cfg.StateDir)
 	if err != nil {
-		return nil, fmt.Errorf("session store: %w", err)
+		return nil, nil, fmt.Errorf("session store: %w", err)
 	}
 
 	// Memory lives under ~/.claude/channels by convention, not under
@@ -121,7 +174,13 @@ func buildDispatcher(cfgPath string) (*core.Dispatcher, error) {
 
 	runner := core.NewClaudeRunner(cfg.ClaudeBinary, "sonnet")
 
-	return core.NewDispatcher(cfg, core.NewAccess(cfg), sessions, mem, runner), nil
+	return core.NewDispatcher(cfg, core.NewAccess(cfg), sessions, mem, runner), cfg, nil
+}
+
+// buildDispatcher is the dispatch-subcommand entry point; it discards cfg.
+func buildDispatcher(cfgPath string) (*core.Dispatcher, error) {
+	d, _, err := buildDispatcherWithConfig(cfgPath)
+	return d, err
 }
 
 func expandHome(p string) string {
