@@ -3,8 +3,10 @@ package telegram
 
 import "strings"
 
-// MaxChunk is Telegram's message length limit in UTF-16 code units.
-// 4096 characters is a safe under-approximation for pure ASCII.
+// MaxChunk is Telegram's message length limit: 4096 bytes. Pure ASCII
+// fits one-to-one. Multi-byte UTF-8 may be cut mid-rune on a hard
+// split, but each chunk remains valid UTF-8 (the cut falls between
+// complete runes on whichever side), so Telegram accepts both.
 const MaxChunk = 4096
 
 // Chunk splits s into pieces no longer than MaxChunk, preferring
