@@ -13,11 +13,16 @@ func NewAccess(cfg *config.Config) *Access {
 }
 
 // Allowed reports whether the given userID is permitted to send turns on
-// the given channel. A disabled or unknown channel always denies.
+// the given channel. A disabled or unknown channel always denies. A
+// channel with OpenAccess=true allows any userID (the client handles
+// authentication via an out-of-band mechanism such as a shared key).
 func (a *Access) Allowed(channel, userID string) bool {
 	ch, ok := a.cfg.Channels[channel]
 	if !ok || !ch.Enabled {
 		return false
+	}
+	if ch.OpenAccess {
+		return true
 	}
 	for _, id := range ch.AllowFrom {
 		if id == userID {

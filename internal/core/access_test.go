@@ -45,3 +45,24 @@ func TestAccess_unknownChannel(t *testing.T) {
 	a := NewAccess(cfg)
 	require.False(t, a.Allowed("telegram", "12345"))
 }
+
+func TestAccess_openAccessAllowsAnyUser(t *testing.T) {
+	cfg := &config.Config{
+		Channels: map[string]config.Channel{
+			"watch": {Enabled: true, OpenAccess: true},
+		},
+	}
+	a := NewAccess(cfg)
+	require.True(t, a.Allowed("watch", "anyone"))
+	require.True(t, a.Allowed("watch", ""))
+}
+
+func TestAccess_openAccessRequiresEnabled(t *testing.T) {
+	cfg := &config.Config{
+		Channels: map[string]config.Channel{
+			"watch": {Enabled: false, OpenAccess: true},
+		},
+	}
+	a := NewAccess(cfg)
+	require.False(t, a.Allowed("watch", "anyone"), "disabled channel denies even with open_access")
+}

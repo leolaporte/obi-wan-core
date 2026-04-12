@@ -21,7 +21,6 @@ channels:
       - "123456"
   watch:
     enabled: true
-    webhook_key: test-key
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
 
@@ -31,7 +30,6 @@ channels:
 	require.Equal(t, "/tmp/obi-wan-core-test", cfg.StateDir)
 	require.True(t, cfg.Channels["telegram"].Enabled)
 	require.Equal(t, []string{"123456"}, cfg.Channels["telegram"].AllowFrom)
-	require.Equal(t, "test-key", cfg.Channels["watch"].WebhookKey)
 }
 
 func TestLoad_missingFile(t *testing.T) {
@@ -58,4 +56,55 @@ state_dir: /tmp/test
 
 	_, err := Load(path)
 	require.Error(t, err, "should reject config missing claude_binary")
+}
+
+func TestLoad_clientFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `
+claude_binary: /home/leo/.local/bin/claude
+state_dir: /tmp/obi-wan-core-test
+concurrency: 3
+channels:
+  telegram:
+    enabled: true
+    allow_from: ["7902467922"]
+    system_prompt_file: /home/leo/.claude/channels/telegram/system-prompt.md
+    bot_token_env: TELEGRAM_BOT_TOKEN
+  watch:
+    enabled: true
+    open_access: true
+    webhook_port: 8199
+    webhook_key_env: WEBHOOK_KEY
+    watch_chat_id_env: WATCH_CHAT_ID
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, 3, cfg.Concurrency)
+	require.Equal(t, "/home/leo/.claude/channels/telegram/system-prompt.md", cfg.Channels["telegram"].SystemPromptFile)
+	require.Equal(t, "TELEGRAM_BOT_TOKEN", cfg.Channels["telegram"].BotTokenEnv)
+	require.True(t, cfg.Channels["watch"].OpenAccess)
+	require.Equal(t, 8199, cfg.Channels["watch"].WebhookPort)
+	require.Equal(t, "WEBHOOK_KEY", cfg.Channels["watch"].WebhookKeyEnv)
+	require.Equal(t, "WATCH_CHAT_ID", cfg.Channels["watch"].WatchChatIDEnv)
+}
+
+func TestLoad_concurrencyDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `
+claude_binary: /home/leo/.local/bin/claude
+state_dir: /tmp/obi-wan-core-test
+channels:
+  telegram:
+    enabled: true
+    allow_from: ["1"]
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, 2, cfg.Concurrency, "unset concurrency defaults to 2")
 }
