@@ -21,6 +21,7 @@ type Dispatcher struct {
 	sessions *SessionStore
 	memory   *memory.Loader
 	claude   *ClaudeRunner
+	sem      chan struct{}
 }
 
 // NewDispatcher wires together the core pieces.
@@ -31,12 +32,17 @@ func NewDispatcher(
 	memoryLoader *memory.Loader,
 	claude *ClaudeRunner,
 ) *Dispatcher {
+	n := cfg.Concurrency
+	if n <= 0 {
+		n = 2
+	}
 	return &Dispatcher{
 		cfg:      cfg,
 		access:   access,
 		sessions: sessions,
 		memory:   memoryLoader,
 		claude:   claude,
+		sem:      make(chan struct{}, n),
 	}
 }
 
@@ -44,12 +50,16 @@ func NewDispatcher(
 // Returns ErrAccessDenied if the user is not allowed on the channel.
 func (d *Dispatcher) Dispatch(ctx context.Context, turn Turn) (*Reply, error) {
 	if !d.access.Allowed(turn.Channel, turn.UserID) {
-		slog.Warn("access denied",
-			"channel", turn.Channel,
-			"user", turn.UserID,
-		)
+		slog.Warn("access denied", "channel", turn.Channel, "user", turn.UserID)
 		return nil, ErrAccessDenied
 	}
+
+	select {
+	case d.sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-d.sem }()
 
 	sid, fresh := d.sessions.LoadOrCreate(turn.Channel)
 

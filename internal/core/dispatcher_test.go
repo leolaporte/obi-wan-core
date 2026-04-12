@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -87,4 +88,43 @@ func TestDispatcher_memoryInjectedIntoSystemPrompt(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "ok", reply.Text)
+}
+
+func TestDispatcher_concurrencyCapSerializes(t *testing.T) {
+	// Mock claude that sleeps for 150ms so we can observe serialization.
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "claude")
+	script := "#!/bin/bash\nsleep 0.15\ncat <<'STDOUT'\n{\"result\":\"ok\"}\nSTDOUT\nexit 0\n"
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0700))
+
+	stateDir := t.TempDir()
+	cfg := &config.Config{
+		ClaudeBinary: bin,
+		StateDir:     stateDir,
+		Concurrency:  1, // force strict serialization
+		Channels: map[string]config.Channel{
+			"telegram": {Enabled: true, AllowFrom: []string{"alice"}},
+		},
+	}
+	sessions, err := NewSessionStore(stateDir)
+	require.NoError(t, err)
+	d := NewDispatcher(cfg, NewAccess(cfg), sessions, memory.NewLoader(t.TempDir()), NewClaudeRunner(bin, "sonnet"))
+
+	// Fire three concurrent dispatches. With concurrency=1 and each taking
+	// ~150ms, three of them serialized should take ≥450ms.
+	var wg sync.WaitGroup
+	start := time.Now()
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := d.Dispatch(context.Background(), Turn{
+				Channel: "telegram", UserID: "alice", Message: "hi",
+			})
+			require.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+	elapsed := time.Since(start)
+	require.GreaterOrEqual(t, elapsed, 400*time.Millisecond, "concurrency=1 should serialize calls")
 }
