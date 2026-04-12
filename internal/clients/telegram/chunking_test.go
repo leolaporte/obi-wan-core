@@ -3,6 +3,7 @@ package telegram
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 )
@@ -46,4 +47,40 @@ func TestChunk_hardSplitsWhenNoBoundaryInRange(t *testing.T) {
 		require.LessOrEqual(t, len(c), 4096)
 	}
 	require.Equal(t, big, strings.Join(out, ""))
+}
+
+func TestChunk_hardSplitProducesValidUTF8(t *testing.T) {
+	// Em-dash (—) is 3 bytes in UTF-8. Build a string of em-dashes long
+	// enough to force a hard split, positioned so the split would land
+	// mid-rune if the chunker were byte-naive.
+	dash := "—"
+	require.Equal(t, 3, len(dash), "em-dash is 3 bytes")
+
+	// 4096 / 3 = 1365.33… so 1400 em-dashes = 4200 bytes. Well over the
+	// cap, with no paragraph/newline boundaries, forcing the hard-split path.
+	s := strings.Repeat(dash, 1400)
+	require.Equal(t, 4200, len(s))
+
+	out := Chunk(s)
+	require.GreaterOrEqual(t, len(out), 2, "should split")
+
+	for i, c := range out {
+		require.True(t, utf8.ValidString(c), "chunk %d is invalid UTF-8: bytes=%v", i, []byte(c))
+		require.LessOrEqual(t, len(c), MaxChunk, "chunk %d exceeds MaxChunk", i)
+	}
+
+	// Byte-perfect recovery after join.
+	require.Equal(t, s, strings.Join(out, ""))
+}
+
+func TestChunk_hardSplitAsciiStillRecovers(t *testing.T) {
+	// Regression test — the rune-aware hard split must still handle the
+	// pure-ASCII case without dropping bytes.
+	s := strings.Repeat("x", 10000)
+	out := Chunk(s)
+	require.GreaterOrEqual(t, len(out), 3)
+	for _, c := range out {
+		require.LessOrEqual(t, len(c), MaxChunk)
+	}
+	require.Equal(t, s, strings.Join(out, ""))
 }
