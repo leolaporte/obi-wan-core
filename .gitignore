@@ -1,0 +1,22 @@
+# Build artifacts
+/obi-wan-core
+/dist/
+/build/
+
+# Environment
+.env
+*.local.env
+
+# Runtime state (should live under ~/.obi-wan-core/, not in repo)
+state/
+sessions/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Go
+*.test
+coverage.out
