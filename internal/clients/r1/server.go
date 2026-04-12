@@ -117,6 +117,16 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 func (s *Server) handleUpgrade(w http.ResponseWriter, r *http.Request) {
+	// The R1 sends a plain HTTP GET health check before upgrading to
+	// WebSocket. If the request doesn't have an Upgrade header, respond
+	// with 200 OK so the R1's pre-flight check passes.
+	if r.Header.Get("Upgrade") == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok","server":"obi-wan-core/r1-shim"}`))
+		return
+	}
+
 	s.connMu.Lock()
 	if s.active {
 		s.connMu.Unlock()
