@@ -3,6 +3,7 @@ package r1
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -56,7 +57,12 @@ func (m *MethodHandler) Handle(ctx context.Context, method string, params json.R
 	case MethodLastHeartbeat, MethodSetHeartbeats:
 		// Application-level heartbeat bookkeeping — safe to stub.
 		return json.RawMessage(`{"ok":true}`), nil
+	case MethodTalkSpeak:
+		return m.handleTalkSpeak(params)
+	case MethodTalkConfig:
+		return m.handleTalkConfig()
 	default:
+		slog.Warn("r1 unknown method called", "method", method, "params", string(params))
 		return nil, &ErrorShape{Code: ErrCodeUnknownMethod, Message: "unknown method: " + method}
 	}
 }
@@ -176,5 +182,36 @@ func (m *MethodHandler) handleNodePendingAck() (json.RawMessage, *ErrorShape) {
 	if err != nil {
 		return nil, &ErrorShape{Code: ErrCodeInternal, Message: err.Error()}
 	}
+	return buf, nil
+}
+
+// handleTalkSpeak returns a fallback-eligible "talk_unconfigured" error.
+// If the R1 firmware implements the same fallback as the OpenClaw Android
+// app, it will use Android system TTS (which supports custom voices) to
+// speak the text locally on-device. This lets us discover whether the R1
+// calls talk.speak at all — check journal logs for this line.
+func (m *MethodHandler) handleTalkSpeak(params json.RawMessage) (json.RawMessage, *ErrorShape) {
+	slog.Info("r1 talk.speak called — returning fallback-eligible error to trigger device TTS", "params", string(params))
+	return nil, &ErrorShape{
+		Code:    "TALK_UNCONFIGURED",
+		Message: "server-side TTS not configured; use device TTS",
+		Details: rawJSON(map[string]any{
+			"reason":           "talk_unconfigured",
+			"fallbackEligible": true,
+		}),
+	}
+}
+
+// handleTalkConfig returns an empty/unconfigured response so the R1 knows
+// to fall back to device-local TTS if it queries TTS capabilities.
+func (m *MethodHandler) handleTalkConfig() (json.RawMessage, *ErrorShape) {
+	slog.Info("r1 talk.config called — returning unconfigured")
+	buf, _ := json.Marshal(map[string]any{
+		"config": map[string]any{
+			"talk": map[string]any{
+				"provider": "",
+			},
+		},
+	})
 	return buf, nil
 }

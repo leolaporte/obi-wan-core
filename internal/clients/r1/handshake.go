@@ -285,6 +285,8 @@ func shimMethods() []string {
 		MethodWake,
 		MethodLastHeartbeat,
 		MethodSetHeartbeats,
+		MethodTalkSpeak,
+		MethodTalkConfig,
 	}
 }
 

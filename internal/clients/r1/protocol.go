@@ -41,6 +41,8 @@ const (
 	MethodWake            = "wake"
 	MethodLastHeartbeat   = "last-heartbeat"
 	MethodSetHeartbeats   = "set-heartbeats"
+	MethodTalkSpeak       = "talk.speak"
+	MethodTalkConfig      = "talk.config"
 )
 
 // RoleNode is the only role this shim accepts. OpenClaw has two roles
