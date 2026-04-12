@@ -140,6 +140,53 @@ func TestDispatcher_combineSystemPrompt_unit(t *testing.T) {
 	require.Equal(t, "", combineSystemPrompt("", ""))
 }
 
+func TestDispatcher_systemPromptFileSizeCapEnforced(t *testing.T) {
+	bin := mockClaudeScript(t, `{"result":"ok"}`, "", 0)
+
+	stateDir := t.TempDir()
+	memDir := t.TempDir()
+
+	// Write a system prompt file larger than the 64KB cap.
+	sysPromptPath := filepath.Join(t.TempDir(), "sys.md")
+	big := make([]byte, 65*1024)
+	for i := range big {
+		big[i] = 'x'
+	}
+	require.NoError(t, os.WriteFile(sysPromptPath, big, 0600))
+
+	cfg := &config.Config{
+		ClaudeBinary: bin,
+		StateDir:     stateDir,
+		Concurrency:  2,
+		Channels: map[string]config.Channel{
+			"telegram": {
+				Enabled:          true,
+				AllowFrom:        []string{"alice"},
+				SystemPromptFile: sysPromptPath,
+			},
+		},
+	}
+	sessions, err := NewSessionStore(stateDir)
+	require.NoError(t, err)
+	d := NewDispatcher(cfg, NewAccess(cfg), sessions, memory.NewLoader(memDir), NewClaudeRunner(bin, "sonnet"))
+
+	// Dispatch should still succeed (oversized prompt is logged and skipped,
+	// not an error), and the reply should come through as normal — proving
+	// the dispatcher degrades gracefully instead of stalling.
+	reply, err := d.Dispatch(context.Background(), Turn{
+		Channel: "telegram", UserID: "alice", Message: "hi",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "ok", reply.Text)
+}
+
+func TestDispatcher_combineSystemPrompt_trimsTrailingWhitespace(t *testing.T) {
+	require.Equal(t, "sys\n\nmem", combineSystemPrompt("sys\n", "mem\n"))
+	require.Equal(t, "sys\n\nmem", combineSystemPrompt("sys\n\n", "mem\n\n"))
+	require.Equal(t, "sys", combineSystemPrompt("sys\n", ""))
+	require.Equal(t, "mem", combineSystemPrompt("", "mem\n"))
+}
+
 func TestDispatcher_concurrencyCapSerializes(t *testing.T) {
 	// Mock claude that sleeps for 150ms so we can observe serialization.
 	dir := t.TempDir()

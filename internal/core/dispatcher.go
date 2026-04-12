@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/leolaporte/obi-wan-core/internal/config"
 	"github.com/leolaporte/obi-wan-core/internal/memory"
@@ -73,16 +74,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, turn Turn) (*Reply, error) {
 
 	var sysPrompt string
 	if path := d.cfg.Channels[turn.Channel].SystemPromptFile; path != "" {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			slog.Warn("system prompt file load failed; continuing without",
-				"channel", turn.Channel,
-				"path", path,
-				"error", err,
-			)
-		} else {
-			sysPrompt = string(data)
-		}
+		sysPrompt = d.loadSystemPromptFile(turn.Channel, path)
 	}
 
 	combined := combineSystemPrompt(sysPrompt, mem)
@@ -120,9 +112,53 @@ func (d *Dispatcher) Dispatch(ctx context.Context, turn Turn) (*Reply, error) {
 	return &Reply{Text: result.Text}, nil
 }
 
+// maxSystemPromptSize caps the on-disk size of a channel's system prompt
+// file. Matches memory.MaxSize — system prompts are manually authored and
+// should never approach this limit; anything larger signals a bug or
+// runaway growth.
+const maxSystemPromptSize = 64 * 1024
+
+// loadSystemPromptFile reads the channel's system prompt file, returning
+// an empty string on any failure (missing file, oversized file, read
+// error). Failures are logged but do not block dispatch.
+func (d *Dispatcher) loadSystemPromptFile(channel, path string) string {
+	info, err := os.Stat(path)
+	if err != nil {
+		slog.Warn("system prompt file stat failed; continuing without",
+			"channel", channel,
+			"path", path,
+			"error", err,
+		)
+		return ""
+	}
+	if info.Size() > maxSystemPromptSize {
+		slog.Warn("system prompt file too large; continuing without",
+			"channel", channel,
+			"path", path,
+			"size", info.Size(),
+			"max", maxSystemPromptSize,
+		)
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		slog.Warn("system prompt file read failed; continuing without",
+			"channel", channel,
+			"path", path,
+			"error", err,
+		)
+		return ""
+	}
+	return string(data)
+}
+
 // combineSystemPrompt joins an optional system prompt and memory block
-// with a paragraph break. Empty inputs are skipped.
+// with a paragraph break. Trailing whitespace is trimmed from both
+// inputs so a file ending in "\n" does not produce a triple newline in
+// the combined output.
 func combineSystemPrompt(sysPrompt, mem string) string {
+	sysPrompt = strings.TrimRight(sysPrompt, " \t\r\n")
+	mem = strings.TrimRight(mem, " \t\r\n")
 	switch {
 	case sysPrompt == "" && mem == "":
 		return ""
