@@ -106,6 +106,8 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MiB
+
 	key := r.URL.Query().Get("key")
 	if key == "" {
 		key = r.Header.Get("X-Pax-Key")

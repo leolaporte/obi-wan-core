@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -108,4 +109,60 @@ func TestHandler_wrongMethodReturns405(t *testing.T) {
 	srv.mux().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+}
+
+func TestHandler_dispatchErrorReturns500(t *testing.T) {
+	fd := &fakeDispatcher{err: errors.New("boom")}
+	srv := newTestServer(t, fd, &fakeEcho{})
+
+	req := httptest.NewRequest(http.MethodPost, "/message?key=secret",
+		bytes.NewBufferString(`{"text":"hi"}`))
+	rr := httptest.NewRecorder()
+	srv.mux().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusInternalServerError, rr.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+	require.Equal(t, "boom", body["error"])
+}
+
+func TestHandler_oversizedBodyReturns400(t *testing.T) {
+	fd := &fakeDispatcher{reply: &core.Reply{Text: "ok"}}
+	srv := newTestServer(t, fd, &fakeEcho{})
+
+	// 2 MiB body — the handler must reject with 400 (the MaxBytesReader
+	// surfaces an error during decode, and the empty-text branch or decode
+	// failure path returns 400). We don't care which exact status as long
+	// as it's 4xx.
+	big := bytes.Repeat([]byte("x"), 2<<20)
+	payload := bytes.NewBuffer(nil)
+	payload.WriteString(`{"text":"`)
+	payload.Write(big)
+	payload.WriteString(`"}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/message?key=secret", payload)
+	rr := httptest.NewRecorder()
+	srv.mux().ServeHTTP(rr, req)
+
+	require.GreaterOrEqual(t, rr.Code, 400)
+	require.Less(t, rr.Code, 500, "oversized body should be 4xx, not 5xx")
+}
+
+func TestNewServer_nilEchoUsesNoOp(t *testing.T) {
+	fd := &fakeDispatcher{reply: &core.Reply{Text: "ok"}}
+	// Explicit nil — NewServer must default to NoOpEcho so handleMessage
+	// doesn't panic calling echo.Echo.
+	srv := NewServer(Config{
+		WebhookKey: "secret",
+		Channel:    "watch",
+		UserLabel:  "watch",
+	}, fd, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/message?key=secret",
+		bytes.NewBufferString(`{"text":"hi"}`))
+	rr := httptest.NewRecorder()
+	require.NotPanics(t, func() {
+		srv.mux().ServeHTTP(rr, req)
+	})
+	require.Equal(t, http.StatusOK, rr.Code)
 }
