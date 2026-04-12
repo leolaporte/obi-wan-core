@@ -1,0 +1,16 @@
+# obi-wan-core configuration
+# Copy to ~/.config/obi-wan-core/config.yaml and edit.
+
+claude_binary: /home/leo/.local/bin/claude
+state_dir: /home/leo/.local/state/obi-wan-core
+
+channels:
+  telegram:
+    enabled: true
+    allow_from:
+      - "YOUR_TELEGRAM_USER_ID"
+  watch:
+    enabled: true
+    webhook_key: "set-via-env-OBI_WAN_CORE_WEBHOOK_KEY"
+  r1:
+    enabled: false  # Plan 3 — not wired up yet
