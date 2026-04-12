@@ -20,6 +20,7 @@ func newTestDispatcher(t *testing.T, mockBin string) (*Dispatcher, string) {
 	cfg := &config.Config{
 		ClaudeBinary: mockBin,
 		StateDir:     stateDir,
+		Concurrency:  2, // must be >= 1; matches config.Load default
 		Channels: map[string]config.Channel{
 			"telegram": {Enabled: true, AllowFrom: []string{"alice"}},
 		},
@@ -111,7 +112,8 @@ func TestDispatcher_concurrencyCapSerializes(t *testing.T) {
 	d := NewDispatcher(cfg, NewAccess(cfg), sessions, memory.NewLoader(t.TempDir()), NewClaudeRunner(bin, "sonnet"))
 
 	// Fire three concurrent dispatches. With concurrency=1 and each taking
-	// ~150ms, three of them serialized should take ≥450ms.
+	// ~150ms, three serialized runs should take ~450ms; we assert ≥400ms
+	// to leave 50ms headroom for CI scheduling jitter.
 	var wg sync.WaitGroup
 	start := time.Now()
 	for i := 0; i < 3; i++ {

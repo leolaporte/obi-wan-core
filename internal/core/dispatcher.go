@@ -24,7 +24,9 @@ type Dispatcher struct {
 	sem      chan struct{}
 }
 
-// NewDispatcher wires together the core pieces.
+// NewDispatcher wires together the core pieces. Callers must pass a
+// config produced by config.Load (or otherwise validated); Concurrency
+// must be >= 1.
 func NewDispatcher(
 	cfg *config.Config,
 	access *Access,
@@ -32,17 +34,13 @@ func NewDispatcher(
 	memoryLoader *memory.Loader,
 	claude *ClaudeRunner,
 ) *Dispatcher {
-	n := cfg.Concurrency
-	if n <= 0 {
-		n = 2
-	}
 	return &Dispatcher{
 		cfg:      cfg,
 		access:   access,
 		sessions: sessions,
 		memory:   memoryLoader,
 		claude:   claude,
-		sem:      make(chan struct{}, n),
+		sem:      make(chan struct{}, cfg.Concurrency),
 	}
 }
 
