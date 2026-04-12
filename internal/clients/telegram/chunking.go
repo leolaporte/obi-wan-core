@@ -38,11 +38,13 @@ func Chunk(s string) []string {
 	return out
 }
 
-// runeSafeSplit returns a byte index at or below max such that
-// remaining[:index] is a valid UTF-8 string. It walks backward from
-// max until utf8.RuneStart reports a rune boundary. UTF-8 runes are at
-// most 4 bytes, so the walk terminates within 3 steps for any valid
-// input.
+// runeSafeSplit returns a byte index at or below max that lands on a
+// rune boundary, so both remaining[:index] and remaining[index:] are
+// valid UTF-8. It walks backward from max until utf8.RuneStart reports
+// a rune start; since UTF-8 runes are at most 4 bytes, the walk
+// terminates within 3 steps for any valid input. Callers must pass a
+// valid UTF-8 string — on invalid input the fallback return may
+// reintroduce a byte-unsafe split.
 func runeSafeSplit(remaining string, max int) int {
 	for i := max; i > 0; i-- {
 		if utf8.RuneStart(remaining[i]) {
