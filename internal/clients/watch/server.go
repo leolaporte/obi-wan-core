@@ -140,7 +140,9 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.echo.Echo(r.Context(), reply.Text)
+	if reply.Text != "" && reply.Text != "(no output)" {
+		s.echo.Echo(r.Context(), reply.Text)
+	}
 	writeJSON(w, http.StatusOK, msgResponse{OK: true, Response: reply.Text})
 }
 
