@@ -55,5 +55,15 @@ func Load(path string) (*Config, error) {
 		cfg.Concurrency = 2
 	}
 
+	if cfg.Concurrency < 1 {
+		return nil, fmt.Errorf("config: concurrency must be >= 1, got %d", cfg.Concurrency)
+	}
+
+	for name, ch := range cfg.Channels {
+		if ch.OpenAccess && len(ch.AllowFrom) > 0 {
+			return nil, fmt.Errorf("config: channel %q has both open_access and allow_from set; remove allow_from", name)
+		}
+	}
+
 	return &cfg, nil
 }

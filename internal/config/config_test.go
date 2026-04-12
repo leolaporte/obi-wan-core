@@ -108,3 +108,41 @@ channels:
 	require.NoError(t, err)
 	require.Equal(t, 2, cfg.Concurrency, "unset concurrency defaults to 2")
 }
+
+func TestLoad_openAccessWithAllowFromRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `
+claude_binary: /home/leo/.local/bin/claude
+state_dir: /tmp/obi-wan-core-test
+channels:
+  watch:
+    enabled: true
+    open_access: true
+    allow_from: ["1"]
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	_, err := Load(path)
+	require.Error(t, err, "should reject channel with both open_access and allow_from")
+	require.Contains(t, err.Error(), "open_access")
+}
+
+func TestLoad_negativeConcurrencyRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `
+claude_binary: /home/leo/.local/bin/claude
+state_dir: /tmp/obi-wan-core-test
+concurrency: -1
+channels:
+  telegram:
+    enabled: true
+    allow_from: ["1"]
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	_, err := Load(path)
+	require.Error(t, err, "negative concurrency should be rejected")
+	require.Contains(t, err.Error(), "concurrency")
+}
