@@ -91,10 +91,13 @@ func (s *SessionStore) filePath(channel string) string {
 }
 
 func newSessionID() string {
-	// 16 bytes → 32 hex chars → suffices as a UUID-like handle.
+	// UUID v4: claude -p --session-id requires canonical 8-4-4-4-12 form.
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		panic(fmt.Errorf("crypto/rand: %w", err))
 	}
-	return hex.EncodeToString(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant RFC 4122
+	h := hex.EncodeToString(b[:])
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
 }
