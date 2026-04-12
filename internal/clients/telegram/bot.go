@@ -60,7 +60,11 @@ func (c *Client) onUpdate(ctx context.Context, b *bot.Bot, update *models.Update
 		return
 	}
 	msg := update.Message
-	userID := strconv.FormatInt(msg.From.ID, 10)
+	userID, ok := extractSender(msg)
+	if !ok {
+		slog.Warn("dropping message with nil From", "chat", msg.Chat.ID, "msgID", msg.ID)
+		return
+	}
 	chatID := msg.Chat.ID
 
 	// Typing indicator while claude is working. Refreshed every 4s.
@@ -70,14 +74,14 @@ func (c *Client) onUpdate(ctx context.Context, b *bot.Bot, update *models.Update
 	reply, err := c.handleText(ctx, userID, msg.Text)
 	if err != nil {
 		slog.Error("dispatch failed", "error", err, "user", userID)
-		c.sendText(ctx, chatID, msg.ID, "Error: "+err.Error())
+		c.sendText(ctx, chatID, replyParamsFor(0, msg.ID), "Error: "+err.Error())
 		return
 	}
 	if reply == "" {
 		return // access denied — silent drop
 	}
-	for _, chunk := range Chunk(reply) {
-		c.sendText(ctx, chatID, msg.ID, chunk)
+	for i, chunk := range Chunk(reply) {
+		c.sendText(ctx, chatID, replyParamsFor(i, msg.ID), chunk)
 	}
 }
 
@@ -98,17 +102,36 @@ func (c *Client) handleText(ctx context.Context, userID, text string) (string, e
 	return r.Text, nil
 }
 
-func (c *Client) sendText(ctx context.Context, chatID int64, replyTo int, text string) {
+func (c *Client) sendText(ctx context.Context, chatID int64, rp *models.ReplyParameters, text string) {
 	_, err := c.bot.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: chatID,
-		Text:   text,
-		ReplyParameters: &models.ReplyParameters{
-			MessageID: replyTo,
-		},
+		ChatID:          chatID,
+		Text:            text,
+		ReplyParameters: rp,
 	})
 	if err != nil {
 		slog.Warn("telegram send failed", "error", err)
 	}
+}
+
+// extractSender returns the string-formatted sender ID from a message,
+// or ("", false) if the message has no From (channel posts, certain
+// automated messages). The caller must drop updates where ok=false.
+func extractSender(msg *models.Message) (string, bool) {
+	if msg.From == nil {
+		return "", false
+	}
+	return strconv.FormatInt(msg.From.ID, 10), true
+}
+
+// replyParamsFor returns the ReplyParameters for chunk index i of a
+// multi-chunk reply. Only the first chunk threads back to the original
+// message; subsequent chunks are sent without reply-threading to avoid
+// repeated "In reply to" banners. Matches telegram-daemon's sendLong.
+func replyParamsFor(i, msgID int) *models.ReplyParameters {
+	if i != 0 {
+		return nil
+	}
+	return &models.ReplyParameters{MessageID: msgID}
 }
 
 // startTypingLoop emits a typing chat action immediately, then again every
