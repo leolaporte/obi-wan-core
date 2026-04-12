@@ -1,0 +1,21 @@
+[Unit]
+Description=obi-wan-core: unified Obi-Wan backend service
+After=network-online.target decrypt-secrets.service
+Wants=network-online.target
+Requires=decrypt-secrets.service
+StartLimitIntervalSec=3600
+StartLimitBurst=3
+
+[Service]
+Type=simple
+# Plan 2/3 will add EnvironmentFile lines for sops-managed secrets
+# (TELEGRAM_BOT_TOKEN, WEBHOOK_KEY, etc.) as their clients need them.
+Environment="PATH=/home/leo/.local/bin:/home/leo/.bun/bin:/usr/local/bin:/usr/bin"
+ExecStart=/home/leo/.local/bin/obi-wan-core serve
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
