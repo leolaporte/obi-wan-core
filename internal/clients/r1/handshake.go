@@ -2,6 +2,7 @@ package r1
 
 import (
 	"encoding/json"
+	"log/slog"
 	"time"
 )
 
@@ -117,18 +118,33 @@ func (h *Handshake) Handle(paramsJSON json.RawMessage) (*HelloOk, *ErrorShape) {
 		return nil, &ErrorShape{Code: ErrCodeInvalidRequest, Message: "bad connect params: " + err.Error()}
 	}
 
+	slog.Info("r1 connect params",
+		"role", params.Role,
+		"minProto", params.MinProtocol,
+		"maxProto", params.MaxProtocol,
+		"clientId", params.Client.ID,
+		"clientMode", params.Client.Mode,
+		"platform", params.Client.Platform,
+		"deviceFamily", params.Client.DeviceFamily,
+		"hasDevice", params.Device != nil,
+		"hasAuth", params.Auth != nil,
+		"raw", string(paramsJSON),
+	)
+
 	// Protocol negotiation.
 	if params.MinProtocol > ProtocolVersion || params.MaxProtocol < ProtocolVersion {
 		return nil, &ErrorShape{Code: ErrCodeInvalidRequest, Message: "protocol mismatch"}
 	}
 
-	// Role gating: only "node" is allowed. Missing defaults to node for this shim.
+	// Role: accept both "node" and "operator". The R1 sends role=operator
+	// with mode=node, which was a recon gap (§8.3). OpenClaw has exactly
+	// two roles; we accept both since this is a single-device shim.
 	role := params.Role
 	if role == "" {
-		role = RoleNode
+		role = "operator"
 	}
-	if role != RoleNode {
-		return nil, &ErrorShape{Code: ErrCodeInvalidRequest, Message: "only role=node is accepted"}
+	if role != "node" && role != "operator" {
+		return nil, &ErrorShape{Code: ErrCodeInvalidRequest, Message: "invalid role: " + role}
 	}
 
 	// Device identity required.
@@ -140,30 +156,33 @@ func (h *Handshake) Handle(paramsJSON json.RawMessage) (*HelloOk, *ErrorShape) {
 		return nil, &ErrorShape{Code: ErrCodeUnauthorized, Message: "nonce mismatch"}
 	}
 
-	// Decide which token is being presented.
+	// Decide which token is being presented. The R1 sends the token in
+	// auth.token (not auth.bootstrapToken), so we check ALL token fields
+	// and classify by matching against the bootstrap secret.
 	var token string
-	var isBootstrap bool
 	if params.Auth != nil {
 		switch {
 		case params.Auth.BootstrapToken != "":
 			token = params.Auth.BootstrapToken
-			isBootstrap = true
 		case params.Auth.DeviceToken != "":
 			token = params.Auth.DeviceToken
 		case params.Auth.Token != "":
 			token = params.Auth.Token
+		case params.Auth.Password != "":
+			token = params.Auth.Password
 		}
 	}
 	if token == "" {
 		return nil, &ErrorShape{Code: ErrCodeUnauthorized, Message: "no token presented"}
 	}
 
+	// Classify: if the token matches the bootstrap secret, it's a first-pair.
+	// Otherwise try it as a device token for reconnect.
+	isBootstrap := h.cfg.BootstrapToken != "" && token == h.cfg.BootstrapToken
+
 	// Validate token against the right backing store.
 	switch {
 	case isBootstrap:
-		if h.cfg.BootstrapToken == "" || token != h.cfg.BootstrapToken {
-			return nil, &ErrorShape{Code: ErrCodeUnauthorized, Message: "invalid bootstrap token"}
-		}
 		if h.cfg.DeviceStore.Paired() {
 			return nil, &ErrorShape{Code: ErrCodeUnauthorized, Message: "r1 already paired"}
 		}
@@ -177,8 +196,10 @@ func (h *Handshake) Handle(paramsJSON json.RawMessage) (*HelloOk, *ErrorShape) {
 		}
 	}
 
-	// Verify ed25519 signature over v3 payload. The shim is v3-only.
-	payload := BuildV3Payload(V3PayloadParams{
+	// Verify ed25519 signature: try v3 first (includes platform/deviceFamily),
+	// then fall back to v2 (without them). Matches OpenClaw's verification
+	// order in handshake-auth-helpers.ts:resolveDeviceSignaturePayloadVersion.
+	sigParams := V3PayloadParams{
 		DeviceID:     params.Device.ID,
 		ClientID:     params.Client.ID,
 		ClientMode:   params.Client.Mode,
@@ -189,8 +210,17 @@ func (h *Handshake) Handle(paramsJSON json.RawMessage) (*HelloOk, *ErrorShape) {
 		Nonce:        params.Device.Nonce,
 		Platform:     params.Client.Platform,
 		DeviceFamily: params.Client.DeviceFamily,
-	})
-	if !VerifySignature(params.Device.PublicKey, payload, params.Device.Signature) {
+	}
+	v3Payload := BuildV3Payload(sigParams)
+	v2Payload := BuildV2Payload(sigParams)
+	if !VerifySignature(params.Device.PublicKey, v3Payload, params.Device.Signature) &&
+		!VerifySignature(params.Device.PublicKey, v2Payload, params.Device.Signature) {
+		slog.Warn("r1 signature mismatch",
+			"v3payload", v3Payload,
+			"v2payload", v2Payload,
+			"sig", params.Device.Signature,
+			"pubkey", params.Device.PublicKey,
+		)
 		return nil, &ErrorShape{Code: ErrCodeUnauthorized, Message: "signature verification failed"}
 	}
 

@@ -44,6 +44,23 @@ func BuildV3Payload(p V3PayloadParams) string {
 	}, "|")
 }
 
+// BuildV2Payload builds the pipe-delimited v2 canonical payload string.
+// Matches buildDeviceAuthPayload in openclaw/src/gateway/device-auth.ts.
+// v2 omits platform and deviceFamily.
+func BuildV2Payload(p V3PayloadParams) string {
+	return strings.Join([]string{
+		"v2",
+		p.DeviceID,
+		p.ClientID,
+		p.ClientMode,
+		p.Role,
+		strings.Join(p.Scopes, ","),
+		strconv.FormatInt(p.SignedAtMs, 10),
+		p.Token,
+		p.Nonce,
+	}, "|")
+}
+
 // asciiLower mirrors openclaw's toLowerAscii: only ASCII A-Z are
 // lowercased, non-ASCII is left alone. Keeps cross-runtime determinism.
 func asciiLower(s string) string {
