@@ -147,6 +147,52 @@ channels:
 	require.Contains(t, err.Error(), "concurrency")
 }
 
+func TestLoad_fallbackFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `
+claude_binary: /home/leo/.local/bin/claude
+state_dir: /tmp/obi-wan-core-test
+model: opus
+fallback:
+  enabled: true
+  base_url: https://api.z.ai/api/anthropic
+  api_key_env: ZAI_API_KEY
+  fallback_model: glm-5.1
+channels:
+  telegram:
+    enabled: true
+    allow_from: ["1"]
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "opus", cfg.Model)
+	require.True(t, cfg.Fallback.Enabled)
+	require.Equal(t, "https://api.z.ai/api/anthropic", cfg.Fallback.BaseURL)
+	require.Equal(t, "ZAI_API_KEY", cfg.Fallback.APIKeyEnv)
+	require.Equal(t, "glm-5.1", cfg.Fallback.FallbackModel)
+}
+
+func TestLoad_modelDefaultsToSonnet(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `
+claude_binary: /home/leo/.local/bin/claude
+state_dir: /tmp/obi-wan-core-test
+channels:
+  telegram:
+    enabled: true
+    allow_from: ["1"]
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "sonnet", cfg.Model, "unset model defaults to sonnet")
+}
+
 func TestLoad_R1Channel(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

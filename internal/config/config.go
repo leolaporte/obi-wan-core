@@ -13,7 +13,17 @@ type Config struct {
 	ClaudeBinary string             `yaml:"claude_binary"`
 	StateDir     string             `yaml:"state_dir"`
 	Concurrency  int                `yaml:"concurrency"`
+	Model        string             `yaml:"model"`
+	Fallback     FallbackConfig     `yaml:"fallback"`
 	Channels     map[string]Channel `yaml:"channels"`
+}
+
+// FallbackConfig holds the alternate provider configuration.
+type FallbackConfig struct {
+	Enabled       bool   `yaml:"enabled"`
+	BaseURL       string `yaml:"base_url"`
+	APIKeyEnv     string `yaml:"api_key_env"`
+	FallbackModel string `yaml:"fallback_model"`
 }
 
 // Channel is the per-channel configuration.
@@ -61,6 +71,10 @@ func Load(path string) (*Config, error) {
 
 	if cfg.Concurrency < 1 {
 		return nil, fmt.Errorf("config: concurrency must be >= 1, got %d", cfg.Concurrency)
+	}
+
+	if cfg.Model == "" {
+		cfg.Model = "sonnet"
 	}
 
 	for name, ch := range cfg.Channels {
