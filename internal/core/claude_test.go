@@ -60,6 +60,22 @@ func TestClaudeRunner_sessionErrorDetected(t *testing.T) {
 	require.True(t, result.SessionError)
 }
 
+func TestClaudeRunner_extraEnvInjected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "claude")
+	script := "#!/bin/bash\necho \"$TEST_FALLBACK_VAR\"\nexit 0\n"
+	require.NoError(t, os.WriteFile(path, []byte(script), 0700))
+
+	runner := NewClaudeRunnerWithEnv(path, "sonnet", []string{"TEST_FALLBACK_VAR=injected_value"})
+	result, err := runner.Run(context.Background(), RunArgs{
+		Message:      "hello",
+		SessionID:    "abc",
+		IsNewSession: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "injected_value", result.Text)
+}
+
 func TestClaudeRunner_nonZeroExitWithoutSessionError(t *testing.T) {
 	bin := mockClaudeScript(t, "", "some other failure", 2)
 

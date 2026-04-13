@@ -13,8 +13,9 @@ import (
 // ClaudeRunner wraps the `claude -p` binary. Each Run call spawns a
 // subprocess with --permission-mode auto and parses its JSON output.
 type ClaudeRunner struct {
-	binary string
-	model  string
+	binary   string
+	model    string
+	extraEnv []string
 }
 
 // NewClaudeRunner constructs a runner.
@@ -23,6 +24,13 @@ type ClaudeRunner struct {
 // model: "sonnet" | "opus" | "haiku"
 func NewClaudeRunner(binary, model string) *ClaudeRunner {
 	return &ClaudeRunner{binary: binary, model: model}
+}
+
+// NewClaudeRunnerWithEnv creates a runner that injects extra environment
+// variables into the subprocess. Used by FallbackRunner to point at alternate
+// API endpoints.
+func NewClaudeRunnerWithEnv(binary, model string, extraEnv []string) *ClaudeRunner {
+	return &ClaudeRunner{binary: binary, model: model, extraEnv: extraEnv}
 }
 
 // RunArgs bundles per-call parameters.
@@ -70,7 +78,9 @@ func (r *ClaudeRunner) Run(ctx context.Context, args RunArgs) (*RunResult, error
 	cmdArgs = append(cmdArgs, dated)
 
 	cmd := exec.CommandContext(ctx, r.binary, cmdArgs...)
-	cmd.Env = append(cmd.Environ(), "CI=1")
+	env := append(cmd.Environ(), "CI=1")
+	env = append(env, r.extraEnv...)
+	cmd.Env = env
 
 	stdout, err := cmd.Output()
 	if err != nil {
