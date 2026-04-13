@@ -159,7 +159,9 @@ func (c *APIClient) Send(ctx context.Context, args SendArgs) (string, error) {
 			toolResults = append(toolResults, map[string]any{
 				"type":        "tool_result",
 				"tool_use_id": block.ID,
-				"content":     result,
+				"content": []map[string]any{
+					{"type": "text", "text": result},
+				},
 			})
 		}
 

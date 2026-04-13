@@ -187,7 +187,10 @@ func TestAPIClient_Send_ToolLoop(t *testing.T) {
 			toolResult := content[0].(map[string]any)
 			assert.Equal(t, "tool_result", toolResult["type"])
 			assert.Equal(t, "call_1", toolResult["tool_use_id"])
-			assert.Equal(t, "mock_result", toolResult["content"])
+			toolContent := toolResult["content"].([]any)
+			textBlock := toolContent[0].(map[string]any)
+			assert.Equal(t, "text", textBlock["type"])
+			assert.Equal(t, "mock_result", textBlock["text"])
 
 			_ = json.NewEncoder(w).Encode(apiResponse{
 				StopReason: "end_turn",
