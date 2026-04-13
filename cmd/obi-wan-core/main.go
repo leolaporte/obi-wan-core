@@ -233,19 +233,17 @@ func buildDispatcherWithConfig(cfgPath string) (*core.Dispatcher, *config.Config
 			tierAPIKey := ""
 			if t.APIKeyEnv != "" {
 				tierAPIKey = os.Getenv(t.APIKeyEnv)
-				if tierAPIKey == "" {
-					slog.Warn("fallback tier enabled but API key env var is empty",
-						"env", t.APIKeyEnv,
-						"label", t.Label,
-					)
-					continue
-				}
 			}
 			if t.AuthTokenEnv != "" {
-				authToken := os.Getenv(t.AuthTokenEnv)
-				if authToken != "" {
-					tierAPIKey = authToken
+				if tok := os.Getenv(t.AuthTokenEnv); tok != "" {
+					tierAPIKey = tok
 				}
+			}
+			if tierAPIKey == "" {
+				slog.Warn("fallback tier has no usable key; skipping",
+					"label", t.Label,
+				)
+				continue
 			}
 			client := core.NewAPIClient(t.BaseURL, tierAPIKey, t.Model)
 			tiers = append(tiers, core.FallbackTier{

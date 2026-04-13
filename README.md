@@ -45,9 +45,25 @@ obi-wan-core dispatch --channel telegram --user 12345 --message "hello"
 ## Configuration
 
 ```yaml
-claude_binary: /home/you/.local/bin/claude
+api_key_env: ANTHROPIC_API_KEY
+base_url: https://api.anthropic.com
 state_dir: ~/.local/state/obi-wan-core
+model: claude-sonnet-4-6
+escalation_model: claude-opus-4-6
+token_budget: 80000
 concurrency: 2
+
+fallback:
+  enabled: true
+  tiers:
+    - base_url: https://api.z.ai/api/anthropic
+      api_key_env: ZAI_API_KEY
+      model: glm-5.1
+      label: GLM
+    - base_url: http://localhost:11434
+      auth_token_env: OLLAMA_AUTH_TOKEN
+      model: gemma4:latest
+      label: Ollama
 
 channels:
   telegram:
