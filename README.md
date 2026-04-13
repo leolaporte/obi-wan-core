@@ -1,23 +1,40 @@
 # obi-wan-core
 
-A unified Go backend that routes voice and text from multiple devices through [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude -p`). One dispatcher, multiple clients, persistent sessions and memory.
+A unified Go backend that routes voice and text from multiple devices through the Anthropic Messages API. One dispatcher, multiple clients, conversation history, and native tool support.
 
 ## What it does
 
 ```
  Telegram DM ──┐
                 │
- Apple Watch ───┤──▶ Dispatcher ──▶ claude -p ──▶ Reply
-                │      ▲
- Rabbit R1 ────┘      │
-                   sessions / memory / access control
+ Apple Watch ───┤──▶ Dispatcher ──▶ Anthropic API ──▶ Reply
+                │      ▲                  │
+ Rabbit R1 ────┘      │             Tool Loop
+                   history / memory     │
+                   access control   ┌───┴───┐
+                                    │ Tools │
+                                    ├───────┤
+                                    │Obsidian│ file ops
+                                    │Fastmail│ calendar + contacts
+                                    │Spawn  │ claude -p for heavy tasks
+                                    └───────┘
 ```
 
-You talk to it from your phone, your watch, or a Rabbit R1 — it all goes through the same Claude session with shared memory and per-channel system prompts. Replies route back to the device that sent the message.
+You talk to it from your phone, your watch, or a Rabbit R1 — it all goes through the same conversation history with shared memory and per-channel system prompts. Replies route back to the device that sent the message.
 
 ## Architecture
 
-**Core** (`internal/core/`) — The dispatcher accepts a `Turn` (channel + user + message), checks access control, loads the session and memory file, shells out to `claude -p`, and returns a `Reply`. A concurrency semaphore prevents overloading. Sessions auto-rotate on error.
+**Core** (`internal/core/`) — The dispatcher accepts a `Turn` (channel + user + message), checks access control, loads conversation history and memory, calls the Anthropic Messages API directly, and returns a `Reply`. A concurrency semaphore prevents overloading. Conversation history is unified across all channels with token-budget pruning. Model escalation via `/opus` prefix.
+
+**Tools** (`internal/tools/`) — Native tool runtime with a registry pattern. Tools are included in every API request; when Claude returns a `tool_use` response, the tool is executed locally and the result sent back in a loop. Seven tools:
+
+- **obsidian_read_note** — Read a note from the Obsidian vault
+- **obsidian_patch_note** — Insert content under a heading (meals, exercise, notes, tasks)
+- **obsidian_write_note** — Create or overwrite a note
+- **fastmail_create_event** — Create calendar events via CalDAV
+- **fastmail_create_contact** — Create contacts via JMAP
+- **fastmail_search_contacts** — Search contacts via JMAP
+- **spawn_claude_code** — Fire-and-forget background `claude -p` for heavy tasks (research, showprep, code review) with full Claude Code skills and MCP access
 
 **Clients** (`internal/clients/`) — Three input adapters, all feeding the same dispatcher:
 
@@ -25,7 +42,9 @@ You talk to it from your phone, your watch, or a Rabbit R1 — it all goes throu
 - **Watch** — HTTP webhook server for Apple Watch dictation (via Shortcuts + Tailscale). Replies echo back to Telegram so you see them on your phone too.
 - **R1** — WebSocket server implementing a subset of the [OpenClaw](https://github.com/nicholasgasior/openclaw) gateway protocol. The R1 connects thinking it's talking to an OpenClaw gateway; we handle QR pairing, ed25519 signature verification, and async message dispatch. Round-trip latency is ~1-2 seconds.
 
-**Config** (`internal/config/`) — Single YAML file defines channels, access control, and secrets references (env var names, never values).
+**Fallback** (`internal/core/fallback.go`) — Multi-tier fallback chain. If the primary Anthropic API fails, falls back to alternate providers (e.g., z.ai GLM, local Ollama).
+
+**Config** (`internal/config/`) — Single YAML file defines channels, access control, tool configuration, and secrets references (env var names, never values).
 
 **Memory** (`internal/memory/`) — Per-channel memory files (`~/.claude/channels/<channel>/memory.md`) are loaded and combined with system prompts on every turn.
 
@@ -65,6 +84,13 @@ fallback:
       model: gemma4:latest
       label: Ollama
 
+# Tool support (optional)
+vault_root: ~/Obsidian/lgl
+fastmail_token_env: FASTMAIL_API_TOKEN
+fastmail_user: your_email@fastmail.com
+fastmail_password_env: FASTMAIL_PASSWORD
+claude_binary: claude
+
 channels:
   telegram:
     enabled: true
@@ -92,22 +118,25 @@ The Rabbit R1 (running [r1_escape](https://github.com/nicholasgasior/r1_escape) 
 
 1. **QR pairing** — R1 scans a QR code containing the gateway URL. On first connect, it sends a bootstrap token; the server stores the device's ed25519 public key.
 2. **Signature verification** — Subsequent connections are authenticated via signed payloads (v2 format).
-3. **Message routing** — Voice transcripts arrive as `sessions.send` method calls, get dispatched through the core as a `Turn`, and replies push back as `chat` events.
+3. **Message routing** — Voice transcripts arrive as `chat.send` method calls, get dispatched through the core as a `Turn`, and replies push back as `chat` events.
 4. **Tick keepalive** — Server sends periodic ticks to keep the connection alive.
 
 The entire shim is ~2,000 lines including tests. No Docker, no OpenClaw installation required.
 
 ## Design decisions
 
-- **Wraps `claude -p`, not the API** — This is Claude Code's full agent loop (tool use, file access, permissions) via subprocess, not a raw API client. `--permission-mode auto` handles tool approvals.
-- **Channels are isolated** — Each channel gets its own session, memory file, and system prompt. A Telegram conversation doesn't bleed into R1.
-- **Fail-open on memory** — If a memory file is missing or too large, dispatch continues without it. The conversation still works; you just lose context.
-- **Session rotation** — If `claude -p` returns a session error, the dispatcher rotates to a fresh session and retries once automatically.
+- **Direct API, not `claude -p`** — Calls the Anthropic Messages API directly for fast, lightweight responses (~3-5K tokens vs ~47K with `claude -p`). Heavy tasks that need the full Claude Code environment (skills, MCP servers) are dispatched via the `spawn_claude_code` tool.
+- **Unified conversation history** — One history file shared across all channels. One Leo, one Obi-Wan.
+- **Native tool runtime** — Tools execute locally in the Go process (file I/O for Obsidian, HTTP for Fastmail). No MCP servers needed for core functionality.
+- **Fail-open on memory** — If a memory file is missing or too large, dispatch continues without it.
+- **Multi-tier fallback** — Primary API failure cascades through configured fallback providers.
 
 ## Requirements
 
 - Go 1.22+
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
+- Anthropic API key
+- For tools: Obsidian vault, Fastmail account (optional)
+- For spawn: [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed (optional)
 - For R1: a Rabbit R1 running r1_escape with OpenClaw gateway support
 
 ## License
