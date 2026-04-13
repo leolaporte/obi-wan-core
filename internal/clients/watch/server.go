@@ -3,10 +3,12 @@ package watch
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/leolaporte/obi-wan-core/internal/core"
@@ -112,7 +114,7 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	if key == "" {
 		key = r.Header.Get("X-Pax-Key")
 	}
-	if key != s.cfg.WebhookKey {
+	if subtle.ConstantTimeCompare([]byte(key), []byte(s.cfg.WebhookKey)) != 1 {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -136,11 +138,13 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		ReceivedAt: time.Now(),
 	})
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, msgResponse{Error: err.Error()})
+		slog.Error("dispatch failed", "channel", s.cfg.Channel, "error", err)
+		writeJSON(w, http.StatusInternalServerError, msgResponse{Error: "internal error"})
 		return
 	}
 
-	if reply.Text != "" && reply.Text != "(no output)" {
+	trimmed := strings.TrimSpace(reply.Text)
+	if trimmed != "" && trimmed != "(no output)" {
 		s.echo.Echo(r.Context(), reply.Text)
 	}
 	writeJSON(w, http.StatusOK, msgResponse{OK: true, Response: reply.Text})

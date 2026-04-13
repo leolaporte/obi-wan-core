@@ -22,7 +22,7 @@ type Config struct {
 type FallbackTier struct {
 	BaseURL   string `yaml:"base_url"`
 	APIKeyEnv string `yaml:"api_key_env"`
-	AuthToken string `yaml:"auth_token,omitempty"`
+	AuthTokenEnv string `yaml:"auth_token_env,omitempty"`
 	Model     string `yaml:"model"`
 	Label     string `yaml:"label"`
 }

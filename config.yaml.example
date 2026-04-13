@@ -13,7 +13,7 @@ fallback:
       model: glm-5.1
       label: GLM
     - base_url: http://localhost:11434
-      auth_token: ollama
+      auth_token_env: OLLAMA_AUTH_TOKEN
       model: gemma4:latest
       label: Ollama
 
@@ -24,6 +24,6 @@ channels:
       - "YOUR_TELEGRAM_USER_ID"
   watch:
     enabled: true
-    webhook_key: "set-via-env-OBI_WAN_CORE_WEBHOOK_KEY"
+    webhook_key_env: OBI_WAN_CORE_WEBHOOK_KEY
   r1:
     enabled: false

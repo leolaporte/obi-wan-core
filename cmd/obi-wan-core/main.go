@@ -233,8 +233,11 @@ func buildDispatcherWithConfig(cfgPath string) (*core.Dispatcher, *config.Config
 				}
 				extraEnv = append(extraEnv, "ANTHROPIC_API_KEY="+apiKey)
 			}
-			if t.AuthToken != "" {
-				extraEnv = append(extraEnv, "ANTHROPIC_AUTH_TOKEN="+t.AuthToken)
+			if t.AuthTokenEnv != "" {
+				authToken := os.Getenv(t.AuthTokenEnv)
+				if authToken != "" {
+					extraEnv = append(extraEnv, "ANTHROPIC_AUTH_TOKEN="+authToken)
+				}
 			}
 			runner := core.NewClaudeRunnerWithEnv(cfg.ClaudeBinary, t.Model, extraEnv)
 			tiers = append(tiers, core.FallbackTierConfig{

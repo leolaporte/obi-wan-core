@@ -68,7 +68,7 @@ concurrency: 3
 channels:
   telegram:
     enabled: true
-    allow_from: ["7902467922"]
+    allow_from: ["123456789"]
     system_prompt_file: /home/leo/.claude/channels/telegram/system-prompt.md
     bot_token_env: TELEGRAM_BOT_TOKEN
   watch:
@@ -162,7 +162,7 @@ fallback:
       model: glm-5.1
       label: GLM
     - base_url: http://localhost:11434
-      auth_token: ollama
+      auth_token_env: OLLAMA_AUTH_TOKEN
       model: qwen3.5:35b
       label: Ollama
 channels:
@@ -182,7 +182,7 @@ channels:
 	require.Equal(t, "glm-5.1", cfg.Fallback.Tiers[0].Model)
 	require.Equal(t, "GLM", cfg.Fallback.Tiers[0].Label)
 	require.Equal(t, "http://localhost:11434", cfg.Fallback.Tiers[1].BaseURL)
-	require.Equal(t, "ollama", cfg.Fallback.Tiers[1].AuthToken)
+	require.Equal(t, "OLLAMA_AUTH_TOKEN", cfg.Fallback.Tiers[1].AuthTokenEnv)
 	require.Equal(t, "qwen3.5:35b", cfg.Fallback.Tiers[1].Model)
 	require.Equal(t, "Ollama", cfg.Fallback.Tiers[1].Label)
 }
