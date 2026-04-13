@@ -61,8 +61,16 @@ func (fr *FallbackRunner) Run(ctx context.Context, args RunArgs) (*RunResult, er
 			return result, nil
 		}
 
-		slog.Info("fallback succeeded", "label", fr.label)
 		prefixed := fmt.Sprintf("[%s] %s", fr.label, fbResult.Text)
+
+		if strings.HasPrefix(fbResult.Text, "Error running claude:") {
+			slog.Error("fallback also failed",
+				"fallback_error", truncate(fbResult.Text, 200),
+			)
+			return &RunResult{Text: prefixed}, nil
+		}
+
+		slog.Info("fallback succeeded", "label", fr.label)
 		return &RunResult{Text: prefixed}, nil
 	}
 
