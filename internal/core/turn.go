@@ -17,3 +17,10 @@ type Turn struct {
 type Reply struct {
 	Text string // the agent's textual response
 }
+
+// Message is a single turn in the conversation history, stored on disk
+// and sent to the Messages API.
+type Message struct {
+	Role    string `json:"role"`    // "user" or "assistant"
+	Content string `json:"content"`
+}
