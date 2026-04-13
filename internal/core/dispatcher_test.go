@@ -27,12 +27,14 @@ func newTestDispatcher(t *testing.T, mockBin string) (*Dispatcher, string) {
 	}
 	sessions, err := NewSessionStore(stateDir)
 	require.NoError(t, err)
+	runner := NewClaudeRunner(mockBin, "sonnet")
+	fb := NewFallbackRunner(runner, nil)
 	d := NewDispatcher(
 		cfg,
 		NewAccess(cfg),
 		sessions,
 		memory.NewLoader(memDir),
-		NewClaudeRunner(mockBin, "sonnet"),
+		fb,
 	)
 	return d, memDir
 }
@@ -124,7 +126,9 @@ func TestDispatcher_systemPromptFileCombinesWithMemory(t *testing.T) {
 	}
 	sessions, err := NewSessionStore(stateDir)
 	require.NoError(t, err)
-	d := NewDispatcher(cfg, NewAccess(cfg), sessions, memory.NewLoader(memDir), NewClaudeRunner(bin, "sonnet"))
+	runner := NewClaudeRunner(bin, "sonnet")
+	fb := NewFallbackRunner(runner, nil)
+	d := NewDispatcher(cfg, NewAccess(cfg), sessions, memory.NewLoader(memDir), fb)
 
 	reply, err := d.Dispatch(context.Background(), Turn{
 		Channel: "telegram", UserID: "alice", Message: "hi",
@@ -168,7 +172,9 @@ func TestDispatcher_systemPromptFileSizeCapEnforced(t *testing.T) {
 	}
 	sessions, err := NewSessionStore(stateDir)
 	require.NoError(t, err)
-	d := NewDispatcher(cfg, NewAccess(cfg), sessions, memory.NewLoader(memDir), NewClaudeRunner(bin, "sonnet"))
+	runner := NewClaudeRunner(bin, "sonnet")
+	fb := NewFallbackRunner(runner, nil)
+	d := NewDispatcher(cfg, NewAccess(cfg), sessions, memory.NewLoader(memDir), fb)
 
 	// Dispatch should still succeed (oversized prompt is logged and skipped,
 	// not an error), and the reply should come through as normal — proving
@@ -205,7 +211,9 @@ func TestDispatcher_concurrencyCapSerializes(t *testing.T) {
 	}
 	sessions, err := NewSessionStore(stateDir)
 	require.NoError(t, err)
-	d := NewDispatcher(cfg, NewAccess(cfg), sessions, memory.NewLoader(t.TempDir()), NewClaudeRunner(bin, "sonnet"))
+	runner := NewClaudeRunner(bin, "sonnet")
+	fb := NewFallbackRunner(runner, nil)
+	d := NewDispatcher(cfg, NewAccess(cfg), sessions, memory.NewLoader(t.TempDir()), fb)
 
 	// Fire three concurrent dispatches. With concurrency=1 and each taking
 	// ~150ms, three serialized runs should take ~450ms; we assert ≥400ms

@@ -22,7 +22,7 @@ type Dispatcher struct {
 	access   *Access
 	sessions *SessionStore
 	memory   *memory.Loader
-	claude   *ClaudeRunner
+	claude   *FallbackRunner
 	sem      chan struct{}
 }
 
@@ -34,7 +34,7 @@ func NewDispatcher(
 	access *Access,
 	sessions *SessionStore,
 	memoryLoader *memory.Loader,
-	claude *ClaudeRunner,
+	claude *FallbackRunner,
 ) *Dispatcher {
 	return &Dispatcher{
 		cfg:      cfg,
