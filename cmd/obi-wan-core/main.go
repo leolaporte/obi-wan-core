@@ -215,9 +215,43 @@ func buildDispatcherWithConfig(cfgPath string) (*core.Dispatcher, *config.Config
 	memRoot := expandHome("~/.claude/channels")
 	mem := memory.NewLoader(memRoot)
 
-	runner := core.NewClaudeRunner(cfg.ClaudeBinary, "sonnet")
+	primary := core.NewClaudeRunner(cfg.ClaudeBinary, cfg.Model)
 
-	return core.NewDispatcher(cfg, core.NewAccess(cfg), sessions, mem, runner), cfg, nil
+	var tiers []core.FallbackTierConfig
+	if cfg.Fallback.Enabled {
+		for _, t := range cfg.Fallback.Tiers {
+			var extraEnv []string
+			extraEnv = append(extraEnv, "ANTHROPIC_BASE_URL="+t.BaseURL)
+			if t.APIKeyEnv != "" {
+				apiKey := os.Getenv(t.APIKeyEnv)
+				if apiKey == "" {
+					slog.Warn("fallback tier enabled but API key env var is empty",
+						"env", t.APIKeyEnv,
+						"label", t.Label,
+					)
+					continue
+				}
+				extraEnv = append(extraEnv, "ANTHROPIC_API_KEY="+apiKey)
+			}
+			if t.AuthToken != "" {
+				extraEnv = append(extraEnv, "ANTHROPIC_AUTH_TOKEN="+t.AuthToken)
+			}
+			runner := core.NewClaudeRunnerWithEnv(cfg.ClaudeBinary, t.Model, extraEnv)
+			tiers = append(tiers, core.FallbackTierConfig{
+				Runner: runner,
+				Label:  t.Label,
+			})
+			slog.Info("fallback tier configured",
+				"label", t.Label,
+				"base_url", t.BaseURL,
+				"model", t.Model,
+			)
+		}
+	}
+
+	fb := core.NewFallbackRunner(primary, core.BuildFallbackTiers(tiers))
+
+	return core.NewDispatcher(cfg, core.NewAccess(cfg), sessions, mem, fb), cfg, nil
 }
 
 // buildDispatcher is the dispatch-subcommand entry point; it discards cfg.
