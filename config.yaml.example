@@ -3,6 +3,19 @@
 
 claude_binary: /home/leo/.local/bin/claude
 state_dir: /home/leo/.local/state/obi-wan-core
+model: sonnet
+
+fallback:
+  enabled: true
+  tiers:
+    - base_url: https://api.z.ai/api/anthropic
+      api_key_env: ZAI_API_KEY
+      model: glm-5.1
+      label: GLM
+    - base_url: http://localhost:11434
+      auth_token: ollama
+      model: qwen3.5:35b
+      label: Ollama
 
 channels:
   telegram:
@@ -13,4 +26,4 @@ channels:
     enabled: true
     webhook_key: "set-via-env-OBI_WAN_CORE_WEBHOOK_KEY"
   r1:
-    enabled: false  # Plan 3 — not wired up yet
+    enabled: false
