@@ -14,7 +14,7 @@ fallback:
       label: GLM
     - base_url: http://localhost:11434
       auth_token: ollama
-      model: qwen3.5:35b
+      model: gemma4:latest
       label: Ollama
 
 channels:
