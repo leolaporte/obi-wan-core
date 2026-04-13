@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/leolaporte/obi-wan-core/internal/config"
@@ -15,12 +16,11 @@ import (
 var ErrAccessDenied = errors.New("access denied")
 
 // Dispatcher is the shared core that all clients route turns through.
-// It looks up the session ID, loads the memory file, invokes claude,
-// handles session rotation on error, and returns a Reply.
+// It looks up conversation history, loads the memory file, invokes the
+// API client via FallbackRunner, and returns a Reply.
 type Dispatcher struct {
 	cfg      *config.Config
 	access   *Access
-	sessions *SessionStore
 	memory   *memory.Loader
 	claude   *FallbackRunner
 	sem      chan struct{}
@@ -32,17 +32,15 @@ type Dispatcher struct {
 func NewDispatcher(
 	cfg *config.Config,
 	access *Access,
-	sessions *SessionStore,
-	memoryLoader *memory.Loader,
+	memory *memory.Loader,
 	claude *FallbackRunner,
 ) *Dispatcher {
 	return &Dispatcher{
-		cfg:      cfg,
-		access:   access,
-		sessions: sessions,
-		memory:   memoryLoader,
-		claude:   claude,
-		sem:      make(chan struct{}, cfg.Concurrency),
+		cfg:    cfg,
+		access: access,
+		memory: memory,
+		claude: claude,
+		sem:    make(chan struct{}, cfg.Concurrency),
 	}
 }
 
@@ -64,9 +62,6 @@ func (d *Dispatcher) Dispatch(ctx context.Context, turn Turn) (*Reply, error) {
 	}
 	defer func() { <-d.sem }()
 
-	sid, fresh := d.sessions.LoadOrCreate(turn.Channel)
-	slog.Info("dispatch: session loaded", "channel", turn.Channel, "sid", sid, "fresh", fresh)
-
 	mem, err := d.memory.Load(turn.Channel)
 	if err != nil {
 		slog.Warn("memory load failed; continuing without",
@@ -83,41 +78,34 @@ func (d *Dispatcher) Dispatch(ctx context.Context, turn Turn) (*Reply, error) {
 
 	combined := combineSystemPrompt(sysPrompt, mem)
 
-	slog.Info("dispatch: calling claude.Run", "channel", turn.Channel, "sid", sid, "fresh", fresh)
-	result, err := d.claude.Run(ctx, RunArgs{
-		Message:      turn.Message,
-		Channel:      turn.Channel,
-		SessionID:    sid,
-		IsNewSession: fresh,
-		SystemPrompt: combined,
-	})
-	slog.Info("dispatch: claude.Run returned", "channel", turn.Channel, "err", err, "sessionError", result != nil && result.SessionError)
+	// Load conversation history for this channel.
+	histPath := filepath.Join(d.cfg.StateDir, turn.Channel+".history.json")
+	hist := NewHistory(histPath, d.cfg.TokenBudget)
+	msgs, _ := hist.Load()
+	msgs = hist.Prune(msgs)
+
+	// Append the new user message.
+	msgs = append(msgs, Message{Role: "user", Content: turn.Message})
+
+	args := SendArgs{
+		System:   combined,
+		Messages: msgs,
+	}
+
+	slog.Info("dispatch: calling claude.Run", "channel", turn.Channel)
+	text, err := d.claude.Run(ctx, args)
 	if err != nil {
 		return nil, err
 	}
 
-	// Session error → rotate and retry ONCE.
-	if result.SessionError {
-		slog.Info("session error; rotating", "channel", turn.Channel)
-		newSID := d.sessions.Rotate(turn.Channel)
-		result, err = d.claude.Run(ctx, RunArgs{
-			Message:      turn.Message,
-			Channel:      turn.Channel,
-			SessionID:    newSID,
-			IsNewSession: true,
-			SystemPrompt: combined,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if result.SessionError {
-			return &Reply{Text: "Session rotation failed; please retry."}, nil
-		}
-	} else if fresh {
-		d.sessions.MarkResumed(turn.Channel)
+	// Persist updated history (user + assistant pair).
+	updated := hist.Append(msgs[:len(msgs)-1], turn.Message, text)
+	updated = hist.Prune(updated)
+	if saveErr := hist.Save(updated); saveErr != nil {
+		slog.Warn("history save failed", "channel", turn.Channel, "error", saveErr)
 	}
 
-	return &Reply{Text: result.Text}, nil
+	return &Reply{Text: text}, nil
 }
 
 // maxSystemPromptSize caps the on-disk size of a channel's system prompt

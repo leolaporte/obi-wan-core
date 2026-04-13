@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
@@ -13,26 +15,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestDispatcher(t *testing.T, mockBin string) (*Dispatcher, string) {
+// mockAPIServer returns an httptest.Server that always responds with the given text.
+func mockAPIServer(t *testing.T, text string) *httptest.Server {
+	t.Helper()
+	srv := mockAPI(t, text, http.StatusOK)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func newTestDispatcher(t *testing.T, srv *httptest.Server) (*Dispatcher, string) {
 	t.Helper()
 	stateDir := t.TempDir()
 	memDir := t.TempDir()
 	cfg := &config.Config{
-		APIKeyEnv: "ANTHROPIC_API_KEY",
-		StateDir:     stateDir,
-		Concurrency:  2, // must be >= 1; matches config.Load default
+		APIKeyEnv:   "ANTHROPIC_API_KEY",
+		StateDir:    stateDir,
+		Concurrency: 2, // must be >= 1; matches config.Load default
+		TokenBudget: 4000,
 		Channels: map[string]config.Channel{
 			"telegram": {Enabled: true, AllowFrom: []string{"alice"}},
 		},
 	}
-	sessions, err := NewSessionStore(stateDir)
-	require.NoError(t, err)
-	runner := NewClaudeRunner(mockBin, "sonnet")
-	fb := NewFallbackRunner(runner, nil)
+	client := NewAPIClient(srv.URL, "test-key", "claude-test")
+	fb := NewFallbackRunner(client, nil)
 	d := NewDispatcher(
 		cfg,
 		NewAccess(cfg),
-		sessions,
 		memory.NewLoader(memDir),
 		fb,
 	)
@@ -40,8 +48,8 @@ func newTestDispatcher(t *testing.T, mockBin string) (*Dispatcher, string) {
 }
 
 func TestDispatcher_allowedTurnReturnsReply(t *testing.T) {
-	bin := mockClaudeScript(t, `{"result":"hi alice"}`, "", 0)
-	d, _ := newTestDispatcher(t, bin)
+	srv := mockAPIServer(t, "hi alice")
+	d, _ := newTestDispatcher(t, srv)
 
 	reply, err := d.Dispatch(context.Background(), Turn{
 		Channel:    "telegram",
@@ -54,8 +62,8 @@ func TestDispatcher_allowedTurnReturnsReply(t *testing.T) {
 }
 
 func TestDispatcher_deniedUserReturnsError(t *testing.T) {
-	bin := mockClaudeScript(t, `{"result":"should not run"}`, "", 0)
-	d, _ := newTestDispatcher(t, bin)
+	srv := mockAPIServer(t, "should not run")
+	d, _ := newTestDispatcher(t, srv)
 
 	_, err := d.Dispatch(context.Background(), Turn{
 		Channel: "telegram", UserID: "mallory", Message: "hi",
@@ -63,20 +71,9 @@ func TestDispatcher_deniedUserReturnsError(t *testing.T) {
 	require.ErrorIs(t, err, ErrAccessDenied)
 }
 
-func TestDispatcher_sessionErrorTriggersRotation(t *testing.T) {
-	bin := mockClaudeScript(t, "", "session not found", 1)
-	d, _ := newTestDispatcher(t, bin)
-
-	reply, err := d.Dispatch(context.Background(), Turn{
-		Channel: "telegram", UserID: "alice", Message: "hi",
-	})
-	require.NoError(t, err)
-	require.NotEmpty(t, reply.Text)
-}
-
 func TestDispatcher_memoryInjectedIntoSystemPrompt(t *testing.T) {
-	bin := mockClaudeScript(t, `{"result":"ok"}`, "", 0)
-	d, memDir := newTestDispatcher(t, bin)
+	srv := mockAPIServer(t, "ok")
+	d, memDir := newTestDispatcher(t, srv)
 
 	chanDir := filepath.Join(memDir, "telegram")
 	require.NoError(t, os.MkdirAll(chanDir, 0700))
@@ -94,7 +91,7 @@ func TestDispatcher_memoryInjectedIntoSystemPrompt(t *testing.T) {
 }
 
 func TestDispatcher_systemPromptFileCombinesWithMemory(t *testing.T) {
-	bin := mockClaudeScript(t, `{"result":"ok"}`, "", 0)
+	srv := mockAPIServer(t, "ok")
 
 	stateDir := t.TempDir()
 	memDir := t.TempDir()
@@ -113,9 +110,10 @@ func TestDispatcher_systemPromptFileCombinesWithMemory(t *testing.T) {
 	))
 
 	cfg := &config.Config{
-		APIKeyEnv: "ANTHROPIC_API_KEY",
-		StateDir:     stateDir,
-		Concurrency:  2,
+		APIKeyEnv:   "ANTHROPIC_API_KEY",
+		StateDir:    stateDir,
+		Concurrency: 2,
+		TokenBudget: 4000,
 		Channels: map[string]config.Channel{
 			"telegram": {
 				Enabled:          true,
@@ -124,11 +122,9 @@ func TestDispatcher_systemPromptFileCombinesWithMemory(t *testing.T) {
 			},
 		},
 	}
-	sessions, err := NewSessionStore(stateDir)
-	require.NoError(t, err)
-	runner := NewClaudeRunner(bin, "sonnet")
-	fb := NewFallbackRunner(runner, nil)
-	d := NewDispatcher(cfg, NewAccess(cfg), sessions, memory.NewLoader(memDir), fb)
+	client := NewAPIClient(srv.URL, "test-key", "claude-test")
+	fb := NewFallbackRunner(client, nil)
+	d := NewDispatcher(cfg, NewAccess(cfg), memory.NewLoader(memDir), fb)
 
 	reply, err := d.Dispatch(context.Background(), Turn{
 		Channel: "telegram", UserID: "alice", Message: "hi",
@@ -145,7 +141,7 @@ func TestDispatcher_combineSystemPrompt_unit(t *testing.T) {
 }
 
 func TestDispatcher_systemPromptFileSizeCapEnforced(t *testing.T) {
-	bin := mockClaudeScript(t, `{"result":"ok"}`, "", 0)
+	srv := mockAPIServer(t, "ok")
 
 	stateDir := t.TempDir()
 	memDir := t.TempDir()
@@ -159,9 +155,10 @@ func TestDispatcher_systemPromptFileSizeCapEnforced(t *testing.T) {
 	require.NoError(t, os.WriteFile(sysPromptPath, big, 0600))
 
 	cfg := &config.Config{
-		APIKeyEnv: "ANTHROPIC_API_KEY",
-		StateDir:     stateDir,
-		Concurrency:  2,
+		APIKeyEnv:   "ANTHROPIC_API_KEY",
+		StateDir:    stateDir,
+		Concurrency: 2,
+		TokenBudget: 4000,
 		Channels: map[string]config.Channel{
 			"telegram": {
 				Enabled:          true,
@@ -170,15 +167,10 @@ func TestDispatcher_systemPromptFileSizeCapEnforced(t *testing.T) {
 			},
 		},
 	}
-	sessions, err := NewSessionStore(stateDir)
-	require.NoError(t, err)
-	runner := NewClaudeRunner(bin, "sonnet")
-	fb := NewFallbackRunner(runner, nil)
-	d := NewDispatcher(cfg, NewAccess(cfg), sessions, memory.NewLoader(memDir), fb)
+	client := NewAPIClient(srv.URL, "test-key", "claude-test")
+	fb := NewFallbackRunner(client, nil)
+	d := NewDispatcher(cfg, NewAccess(cfg), memory.NewLoader(memDir), fb)
 
-	// Dispatch should still succeed (oversized prompt is logged and skipped,
-	// not an error), and the reply should come through as normal — proving
-	// the dispatcher degrades gracefully instead of stalling.
 	reply, err := d.Dispatch(context.Background(), Turn{
 		Channel: "telegram", UserID: "alice", Message: "hi",
 	})
@@ -194,26 +186,28 @@ func TestDispatcher_combineSystemPrompt_trimsTrailingWhitespace(t *testing.T) {
 }
 
 func TestDispatcher_concurrencyCapSerializes(t *testing.T) {
-	// Mock claude that sleeps for 150ms so we can observe serialization.
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "claude")
-	script := "#!/bin/bash\nsleep 0.15\ncat <<'STDOUT'\n{\"result\":\"ok\"}\nSTDOUT\nexit 0\n"
-	require.NoError(t, os.WriteFile(bin, []byte(script), 0700))
+	// Mock API server that sleeps 150ms before responding.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(150 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"content":[{"type":"text","text":"ok"}]}`))
+	}))
+	t.Cleanup(srv.Close)
 
 	stateDir := t.TempDir()
 	cfg := &config.Config{
-		APIKeyEnv: "ANTHROPIC_API_KEY",
-		StateDir:     stateDir,
-		Concurrency:  1, // force strict serialization
+		APIKeyEnv:   "ANTHROPIC_API_KEY",
+		StateDir:    stateDir,
+		Concurrency: 1, // force strict serialization
+		TokenBudget: 4000,
 		Channels: map[string]config.Channel{
 			"telegram": {Enabled: true, AllowFrom: []string{"alice"}},
 		},
 	}
-	sessions, err := NewSessionStore(stateDir)
-	require.NoError(t, err)
-	runner := NewClaudeRunner(bin, "sonnet")
-	fb := NewFallbackRunner(runner, nil)
-	d := NewDispatcher(cfg, NewAccess(cfg), sessions, memory.NewLoader(t.TempDir()), fb)
+	client := NewAPIClient(srv.URL, "test-key", "claude-test")
+	fb := NewFallbackRunner(client, nil)
+	d := NewDispatcher(cfg, NewAccess(cfg), memory.NewLoader(t.TempDir()), fb)
 
 	// Fire three concurrent dispatches. With concurrency=1 and each taking
 	// ~150ms, three serialized runs should take ~450ms; we assert ≥400ms
