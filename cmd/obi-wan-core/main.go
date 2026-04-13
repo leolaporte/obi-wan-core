@@ -13,8 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"os/exec"
-
 	"github.com/leolaporte/obi-wan-core/internal/clients/r1"
 	"github.com/leolaporte/obi-wan-core/internal/clients/telegram"
 	"github.com/leolaporte/obi-wan-core/internal/clients/watch"
@@ -207,46 +205,51 @@ func buildDispatcherWithConfig(cfgPath string) (*core.Dispatcher, *config.Config
 		return nil, nil, fmt.Errorf("load config: %w", err)
 	}
 
+	// Resolve primary API key.
+	apiKey := os.Getenv(cfg.APIKeyEnv)
+	if apiKey == "" {
+		return nil, nil, fmt.Errorf("%s is empty", cfg.APIKeyEnv)
+	}
+
+	// Ensure state dir exists.
+	if err := os.MkdirAll(cfg.StateDir, 0700); err != nil {
+		return nil, nil, fmt.Errorf("create state dir: %w", err)
+	}
+
+	// Unified history shared across all channels.
 	history := core.NewHistory(filepath.Join(cfg.StateDir, "history.json"), cfg.TokenBudget)
 
-	// Memory lives under ~/.claude/channels by convention, not under
-	// state_dir — shared with Claude Code's existing channel memory.
+	// Memory lives under ~/.claude/channels by convention.
 	memRoot := expandHome("~/.claude/channels")
 	mem := memory.NewLoader(memRoot)
 
-	claudeBin, err := exec.LookPath("claude")
-	if err != nil {
-		// fall back to well-known install location
-		claudeBin = expandHome("~/.local/bin/claude")
-	}
+	// Primary API client.
+	primary := core.NewAPIClient(cfg.BaseURL, apiKey, cfg.Model)
 
-	primary := core.NewClaudeRunner(claudeBin, cfg.Model)
-
-	var tiers []core.FallbackTierConfig
+	// Fallback tiers.
+	var tiers []core.FallbackTier
 	if cfg.Fallback.Enabled {
 		for _, t := range cfg.Fallback.Tiers {
-			var extraEnv []string
-			extraEnv = append(extraEnv, "ANTHROPIC_BASE_URL="+t.BaseURL)
+			tierAPIKey := ""
 			if t.APIKeyEnv != "" {
-				apiKey := os.Getenv(t.APIKeyEnv)
-				if apiKey == "" {
+				tierAPIKey = os.Getenv(t.APIKeyEnv)
+				if tierAPIKey == "" {
 					slog.Warn("fallback tier enabled but API key env var is empty",
 						"env", t.APIKeyEnv,
 						"label", t.Label,
 					)
 					continue
 				}
-				extraEnv = append(extraEnv, "ANTHROPIC_API_KEY="+apiKey)
 			}
 			if t.AuthTokenEnv != "" {
 				authToken := os.Getenv(t.AuthTokenEnv)
 				if authToken != "" {
-					extraEnv = append(extraEnv, "ANTHROPIC_AUTH_TOKEN="+authToken)
+					tierAPIKey = authToken
 				}
 			}
-			runner := core.NewClaudeRunnerWithEnv(claudeBin, t.Model, extraEnv)
-			tiers = append(tiers, core.FallbackTierConfig{
-				Runner: runner,
+			client := core.NewAPIClient(t.BaseURL, tierAPIKey, t.Model)
+			tiers = append(tiers, core.FallbackTier{
+				Client: client,
 				Label:  t.Label,
 			})
 			slog.Info("fallback tier configured",
@@ -257,7 +260,7 @@ func buildDispatcherWithConfig(cfgPath string) (*core.Dispatcher, *config.Config
 		}
 	}
 
-	fb := core.NewFallbackRunner(primary, core.BuildFallbackTiers(tiers))
+	fb := core.NewFallbackRunner(primary, tiers)
 
 	return core.NewDispatcher(cfg, core.NewAccess(cfg), history, mem, fb), cfg, nil
 }

@@ -1,9 +1,12 @@
 # obi-wan-core configuration
 # Copy to ~/.config/obi-wan-core/config.yaml and edit.
 
-claude_binary: /home/leo/.local/bin/claude
+api_key_env: ANTHROPIC_API_KEY
+base_url: https://api.anthropic.com
 state_dir: /home/leo/.local/state/obi-wan-core
-model: sonnet
+model: claude-sonnet-4-6
+escalation_model: claude-opus-4-6
+token_budget: 80000
 
 fallback:
   enabled: true
