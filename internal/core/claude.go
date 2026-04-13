@@ -124,19 +124,4 @@ func isSessionError(stderr string) bool {
 		strings.Contains(lower, "enoent")
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
-}
-
-// mustLoadLA returns America/Los_Angeles, falling back to UTC if tzdata
-// is missing.
-func mustLoadLA() *time.Location {
-	loc, err := time.LoadLocation("America/Los_Angeles")
-	if err != nil {
-		return time.UTC
-	}
-	return loc
-}
+// truncate and mustLoadLA live in dispatcher.go (shared by both files).

@@ -207,10 +207,7 @@ func buildDispatcherWithConfig(cfgPath string) (*core.Dispatcher, *config.Config
 		return nil, nil, fmt.Errorf("load config: %w", err)
 	}
 
-	sessions, err := core.NewSessionStore(cfg.StateDir)
-	if err != nil {
-		return nil, nil, fmt.Errorf("session store: %w", err)
-	}
+	history := core.NewHistory(filepath.Join(cfg.StateDir, "history.json"), cfg.TokenBudget)
 
 	// Memory lives under ~/.claude/channels by convention, not under
 	// state_dir — shared with Claude Code's existing channel memory.
@@ -262,7 +259,7 @@ func buildDispatcherWithConfig(cfgPath string) (*core.Dispatcher, *config.Config
 
 	fb := core.NewFallbackRunner(primary, core.BuildFallbackTiers(tiers))
 
-	return core.NewDispatcher(cfg, core.NewAccess(cfg), sessions, mem, fb), cfg, nil
+	return core.NewDispatcher(cfg, core.NewAccess(cfg), history, mem, fb), cfg, nil
 }
 
 // buildDispatcher is the dispatch-subcommand entry point; it discards cfg.

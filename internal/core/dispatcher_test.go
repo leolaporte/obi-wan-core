@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -28,19 +29,22 @@ func newTestDispatcher(t *testing.T, srv *httptest.Server) (*Dispatcher, string)
 	stateDir := t.TempDir()
 	memDir := t.TempDir()
 	cfg := &config.Config{
-		APIKeyEnv:   "ANTHROPIC_API_KEY",
-		StateDir:    stateDir,
-		Concurrency: 2, // must be >= 1; matches config.Load default
-		TokenBudget: 4000,
+		APIKeyEnv:       "ANTHROPIC_API_KEY",
+		StateDir:        stateDir,
+		Concurrency:     2, // must be >= 1; matches config.Load default
+		TokenBudget:     4000,
+		EscalationModel: "claude-opus-4-6",
 		Channels: map[string]config.Channel{
 			"telegram": {Enabled: true, AllowFrom: []string{"alice"}},
 		},
 	}
 	client := NewAPIClient(srv.URL, "test-key", "claude-test")
 	fb := NewFallbackRunner(client, nil)
+	history := NewHistory(filepath.Join(stateDir, "history.json"), cfg.TokenBudget)
 	d := NewDispatcher(
 		cfg,
 		NewAccess(cfg),
+		history,
 		memory.NewLoader(memDir),
 		fb,
 	)
@@ -124,7 +128,8 @@ func TestDispatcher_systemPromptFileCombinesWithMemory(t *testing.T) {
 	}
 	client := NewAPIClient(srv.URL, "test-key", "claude-test")
 	fb := NewFallbackRunner(client, nil)
-	d := NewDispatcher(cfg, NewAccess(cfg), memory.NewLoader(memDir), fb)
+	history := NewHistory(filepath.Join(stateDir, "history.json"), cfg.TokenBudget)
+	d := NewDispatcher(cfg, NewAccess(cfg), history, memory.NewLoader(memDir), fb)
 
 	reply, err := d.Dispatch(context.Background(), Turn{
 		Channel: "telegram", UserID: "alice", Message: "hi",
@@ -169,7 +174,8 @@ func TestDispatcher_systemPromptFileSizeCapEnforced(t *testing.T) {
 	}
 	client := NewAPIClient(srv.URL, "test-key", "claude-test")
 	fb := NewFallbackRunner(client, nil)
-	d := NewDispatcher(cfg, NewAccess(cfg), memory.NewLoader(memDir), fb)
+	history := NewHistory(filepath.Join(stateDir, "history.json"), cfg.TokenBudget)
+	d := NewDispatcher(cfg, NewAccess(cfg), history, memory.NewLoader(memDir), fb)
 
 	reply, err := d.Dispatch(context.Background(), Turn{
 		Channel: "telegram", UserID: "alice", Message: "hi",
@@ -207,7 +213,8 @@ func TestDispatcher_concurrencyCapSerializes(t *testing.T) {
 	}
 	client := NewAPIClient(srv.URL, "test-key", "claude-test")
 	fb := NewFallbackRunner(client, nil)
-	d := NewDispatcher(cfg, NewAccess(cfg), memory.NewLoader(t.TempDir()), fb)
+	history := NewHistory(filepath.Join(stateDir, "history.json"), cfg.TokenBudget)
+	d := NewDispatcher(cfg, NewAccess(cfg), history, memory.NewLoader(t.TempDir()), fb)
 
 	// Fire three concurrent dispatches. With concurrency=1 and each taking
 	// ~150ms, three serialized runs should take ~450ms; we assert ≥400ms
@@ -227,4 +234,91 @@ func TestDispatcher_concurrencyCapSerializes(t *testing.T) {
 	wg.Wait()
 	elapsed := time.Since(start)
 	require.GreaterOrEqual(t, elapsed, 400*time.Millisecond, "concurrency=1 should serialize calls")
+}
+
+func TestDispatcher_HistorySavedBetweenTurns(t *testing.T) {
+	srv := mockAPIServer(t, "reply")
+	d, _ := newTestDispatcher(t, srv)
+	ctx := context.Background()
+
+	// First turn
+	_, err := d.Dispatch(ctx, Turn{Channel: "telegram", UserID: "alice", Message: "first"})
+	require.NoError(t, err)
+
+	history, _ := d.history.Load()
+	require.Len(t, history, 2, "first turn should produce 1 user+assistant pair")
+
+	// Second turn
+	_, err = d.Dispatch(ctx, Turn{Channel: "telegram", UserID: "alice", Message: "second"})
+	require.NoError(t, err)
+
+	history, _ = d.history.Load()
+	require.Len(t, history, 4, "two turns should produce 2 user+assistant pairs")
+}
+
+func TestDispatcher_ModelEscalation(t *testing.T) {
+	var receivedModel string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if m, ok := body["model"].(string); ok {
+			receivedModel = m
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"content": []map[string]any{
+				{"type": "text", "text": "escalated reply"},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	stateDir := t.TempDir()
+	cfg := &config.Config{
+		APIKeyEnv:       "ANTHROPIC_API_KEY",
+		StateDir:        stateDir,
+		Concurrency:     2,
+		TokenBudget:     4000,
+		EscalationModel: "claude-opus-4-6",
+		Channels: map[string]config.Channel{
+			"telegram": {Enabled: true, AllowFrom: []string{"alice"}},
+		},
+	}
+	client := NewAPIClient(srv.URL, "test-key", "claude-test")
+	fb := NewFallbackRunner(client, nil)
+	history := NewHistory(filepath.Join(stateDir, "history.json"), cfg.TokenBudget)
+	d := NewDispatcher(cfg, NewAccess(cfg), history, memory.NewLoader(t.TempDir()), fb)
+
+	reply, err := d.Dispatch(context.Background(), Turn{
+		Channel: "telegram", UserID: "alice", Message: "/opus think hard",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "claude-opus-4-6", receivedModel)
+	require.Equal(t, "escalated reply", reply.Text)
+}
+
+func TestDispatcher_APIErrorReturnsErrorText(t *testing.T) {
+	srv := mockAPI(t, "", http.StatusInternalServerError)
+	t.Cleanup(srv.Close)
+
+	stateDir := t.TempDir()
+	cfg := &config.Config{
+		APIKeyEnv:   "ANTHROPIC_API_KEY",
+		StateDir:    stateDir,
+		Concurrency: 2,
+		TokenBudget: 4000,
+		Channels: map[string]config.Channel{
+			"telegram": {Enabled: true, AllowFrom: []string{"alice"}},
+		},
+	}
+	client := NewAPIClient(srv.URL, "test-key", "claude-test")
+	fb := NewFallbackRunner(client, nil)
+	history := NewHistory(filepath.Join(stateDir, "history.json"), cfg.TokenBudget)
+	d := NewDispatcher(cfg, NewAccess(cfg), history, memory.NewLoader(t.TempDir()), fb)
+
+	reply, err := d.Dispatch(context.Background(), Turn{
+		Channel: "telegram", UserID: "alice", Message: "hi",
+	})
+	require.NoError(t, err, "API errors are returned as reply text, not Go errors")
+	require.Contains(t, reply.Text, "Error")
 }
