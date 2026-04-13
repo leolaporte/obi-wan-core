@@ -20,6 +20,13 @@ fallback:
       model: gemma4:latest
       label: Ollama
 
+# Tool support (optional)
+vault_root: ~/Obsidian/lgl
+fastmail_token_env: FASTMAIL_API_TOKEN
+fastmail_user: your_email@fastmail.com
+fastmail_password_env: FASTMAIL_PASSWORD
+claude_binary: claude
+
 channels:
   telegram:
     enabled: true

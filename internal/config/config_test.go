@@ -210,6 +210,33 @@ channels:
 	require.Equal(t, "claude-sonnet-4-6", cfg.Model, "unset model defaults to claude-sonnet-4-6")
 }
 
+func TestLoad_toolConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `
+api_key_env: ANTHROPIC_API_KEY
+state_dir: /tmp/obi-wan-core-test
+vault_root: ~/Obsidian/lgl
+fastmail_token_env: FASTMAIL_API_TOKEN
+fastmail_user: leo@fastmail.com
+fastmail_password_env: FASTMAIL_PASSWORD
+claude_binary: /home/leo/.local/bin/claude
+channels:
+  telegram:
+    enabled: true
+    allow_from: ["1"]
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Equal(t, "~/Obsidian/lgl", cfg.VaultRoot)
+	require.Equal(t, "FASTMAIL_API_TOKEN", cfg.FastmailTokenEnv)
+	require.Equal(t, "leo@fastmail.com", cfg.FastmailUser)
+	require.Equal(t, "FASTMAIL_PASSWORD", cfg.FastmailPasswordEnv)
+	require.Equal(t, "/home/leo/.local/bin/claude", cfg.ClaudeBinary)
+}
+
 func TestLoad_R1Channel(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

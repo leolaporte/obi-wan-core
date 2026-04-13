@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sync"
@@ -19,6 +21,7 @@ import (
 	"github.com/leolaporte/obi-wan-core/internal/config"
 	"github.com/leolaporte/obi-wan-core/internal/core"
 	"github.com/leolaporte/obi-wan-core/internal/memory"
+	"github.com/leolaporte/obi-wan-core/internal/tools"
 )
 
 const defaultConfigPath = "~/.config/obi-wan-core/config.yaml"
@@ -225,6 +228,56 @@ func buildDispatcherWithConfig(cfgPath string) (*core.Dispatcher, *config.Config
 
 	// Primary API client.
 	primary := core.NewAPIClient(cfg.BaseURL, apiKey, cfg.Model)
+
+	// Tool registry.
+	registry := tools.NewRegistry()
+
+	// Obsidian tools (if vault_root configured).
+	if cfg.VaultRoot != "" {
+		vaultRoot := expandHome(cfg.VaultRoot)
+		tools.RegisterObsidianTools(registry, vaultRoot)
+		slog.Info("obsidian tools registered", "vault", vaultRoot)
+	}
+
+	// Fastmail tools (if credentials configured).
+	if cfg.FastmailTokenEnv != "" || cfg.FastmailUser != "" {
+		fmToken := os.Getenv(cfg.FastmailTokenEnv)
+		fmPassword := ""
+		if cfg.FastmailPasswordEnv != "" {
+			fmPassword = os.Getenv(cfg.FastmailPasswordEnv)
+		}
+		tools.RegisterFastmailTools(registry,
+			"https://caldav.fastmail.com",
+			cfg.FastmailUser, fmPassword,
+			"https://api.fastmail.com/jmap/api/", fmToken,
+		)
+		slog.Info("fastmail tools registered")
+	}
+
+	// Spawn claude tool (if binary configured or found in PATH).
+	claudeBin := cfg.ClaudeBinary
+	if claudeBin == "" {
+		if found, err := exec.LookPath("claude"); err == nil {
+			claudeBin = found
+		}
+	} else {
+		claudeBin = expandHome(claudeBin)
+	}
+	if claudeBin != "" {
+		tools.RegisterClaudeTools(registry, claudeBin)
+		slog.Info("spawn_claude_code tool registered", "binary", claudeBin)
+	}
+
+	// Wire tools into API client.
+	schemas := registry.Schemas()
+	if len(schemas) > 0 {
+		rawSchemas := make([]json.RawMessage, len(schemas))
+		for i, s := range schemas {
+			rawSchemas[i], _ = json.Marshal(s)
+		}
+		primary.SetToolSchemas(rawSchemas)
+		primary.SetToolExecutor(registry.Execute)
+	}
 
 	// Fallback tiers.
 	var tiers []core.FallbackTier

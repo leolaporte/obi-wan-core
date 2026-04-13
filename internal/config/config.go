@@ -19,6 +19,13 @@ type Config struct {
 	TokenBudget     int                `yaml:"token_budget"`
 	Fallback        FallbackConfig     `yaml:"fallback"`
 	Channels        map[string]Channel `yaml:"channels"`
+
+	// Tool support
+	VaultRoot           string `yaml:"vault_root"`
+	FastmailTokenEnv    string `yaml:"fastmail_token_env"`
+	FastmailUser        string `yaml:"fastmail_user"`
+	FastmailPasswordEnv string `yaml:"fastmail_password_env"`
+	ClaudeBinary        string `yaml:"claude_binary"`
 }
 
 // FallbackTier describes a single fallback provider.
