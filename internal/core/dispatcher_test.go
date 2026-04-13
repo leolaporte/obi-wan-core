@@ -18,7 +18,7 @@ func newTestDispatcher(t *testing.T, mockBin string) (*Dispatcher, string) {
 	stateDir := t.TempDir()
 	memDir := t.TempDir()
 	cfg := &config.Config{
-		ClaudeBinary: mockBin,
+		APIKeyEnv: "ANTHROPIC_API_KEY",
 		StateDir:     stateDir,
 		Concurrency:  2, // must be >= 1; matches config.Load default
 		Channels: map[string]config.Channel{
@@ -113,7 +113,7 @@ func TestDispatcher_systemPromptFileCombinesWithMemory(t *testing.T) {
 	))
 
 	cfg := &config.Config{
-		ClaudeBinary: bin,
+		APIKeyEnv: "ANTHROPIC_API_KEY",
 		StateDir:     stateDir,
 		Concurrency:  2,
 		Channels: map[string]config.Channel{
@@ -159,7 +159,7 @@ func TestDispatcher_systemPromptFileSizeCapEnforced(t *testing.T) {
 	require.NoError(t, os.WriteFile(sysPromptPath, big, 0600))
 
 	cfg := &config.Config{
-		ClaudeBinary: bin,
+		APIKeyEnv: "ANTHROPIC_API_KEY",
 		StateDir:     stateDir,
 		Concurrency:  2,
 		Channels: map[string]config.Channel{
@@ -202,7 +202,7 @@ func TestDispatcher_concurrencyCapSerializes(t *testing.T) {
 
 	stateDir := t.TempDir()
 	cfg := &config.Config{
-		ClaudeBinary: bin,
+		APIKeyEnv: "ANTHROPIC_API_KEY",
 		StateDir:     stateDir,
 		Concurrency:  1, // force strict serialization
 		Channels: map[string]config.Channel{

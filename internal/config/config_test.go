@@ -12,7 +12,7 @@ func TestLoad_minimalValid(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	content := `
-claude_binary: /home/leo/.local/bin/claude
+api_key_env: ANTHROPIC_API_KEY
 state_dir: /tmp/obi-wan-core-test
 channels:
   telegram:
@@ -26,7 +26,11 @@ channels:
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
-	require.Equal(t, "/home/leo/.local/bin/claude", cfg.ClaudeBinary)
+	require.Equal(t, "ANTHROPIC_API_KEY", cfg.APIKeyEnv)
+	require.Equal(t, "https://api.anthropic.com", cfg.BaseURL)
+	require.Equal(t, "claude-sonnet-4-6", cfg.Model)
+	require.Equal(t, 80000, cfg.TokenBudget)
+	require.Equal(t, "claude-opus-4-6", cfg.EscalationModel)
 	require.Equal(t, "/tmp/obi-wan-core-test", cfg.StateDir)
 	require.True(t, cfg.Channels["telegram"].Enabled)
 	require.Equal(t, []string{"123456"}, cfg.Channels["telegram"].AllowFrom)
@@ -55,14 +59,14 @@ state_dir: /tmp/test
 	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
 
 	_, err := Load(path)
-	require.Error(t, err, "should reject config missing claude_binary")
+	require.Error(t, err, "should reject config missing api_key_env")
 }
 
 func TestLoad_clientFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	content := `
-claude_binary: /home/leo/.local/bin/claude
+api_key_env: ANTHROPIC_API_KEY
 state_dir: /tmp/obi-wan-core-test
 concurrency: 3
 channels:
@@ -82,6 +86,7 @@ channels:
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
+	require.Equal(t, "ANTHROPIC_API_KEY", cfg.APIKeyEnv)
 	require.Equal(t, 3, cfg.Concurrency)
 	require.Equal(t, "/home/leo/.claude/channels/telegram/system-prompt.md", cfg.Channels["telegram"].SystemPromptFile)
 	require.Equal(t, "TELEGRAM_BOT_TOKEN", cfg.Channels["telegram"].BotTokenEnv)
@@ -95,7 +100,7 @@ func TestLoad_concurrencyDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	content := `
-claude_binary: /home/leo/.local/bin/claude
+api_key_env: ANTHROPIC_API_KEY
 state_dir: /tmp/obi-wan-core-test
 channels:
   telegram:
@@ -113,7 +118,7 @@ func TestLoad_openAccessWithAllowFromRejected(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	content := `
-claude_binary: /home/leo/.local/bin/claude
+api_key_env: ANTHROPIC_API_KEY
 state_dir: /tmp/obi-wan-core-test
 channels:
   watch:
@@ -132,7 +137,7 @@ func TestLoad_negativeConcurrencyRejected(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	content := `
-claude_binary: /home/leo/.local/bin/claude
+api_key_env: ANTHROPIC_API_KEY
 state_dir: /tmp/obi-wan-core-test
 concurrency: -1
 channels:
@@ -151,7 +156,7 @@ func TestLoad_fallbackTiers(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	content := `
-claude_binary: /home/leo/.local/bin/claude
+api_key_env: ANTHROPIC_API_KEY
 state_dir: /tmp/obi-wan-core-test
 model: opus
 fallback:
@@ -191,7 +196,7 @@ func TestLoad_modelDefaultsToSonnet(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	content := `
-claude_binary: /home/leo/.local/bin/claude
+api_key_env: ANTHROPIC_API_KEY
 state_dir: /tmp/obi-wan-core-test
 channels:
   telegram:
@@ -202,13 +207,13 @@ channels:
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
-	require.Equal(t, "sonnet", cfg.Model, "unset model defaults to sonnet")
+	require.Equal(t, "claude-sonnet-4-6", cfg.Model, "unset model defaults to claude-sonnet-4-6")
 }
 
 func TestLoad_R1Channel(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	body := "claude_binary: /bin/true\n" +
+	body := "api_key_env: ANTHROPIC_API_KEY\n" +
 		"state_dir: " + dir + "\n" +
 		"channels:\n" +
 		"  r1:\n" +

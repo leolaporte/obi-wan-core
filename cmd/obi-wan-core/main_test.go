@@ -14,7 +14,7 @@ func TestBuildDispatcherWithConfig(t *testing.T) {
 	stateDir := filepath.Join(dir, "state")
 	cfgPath := filepath.Join(dir, "config.yaml")
 
-	yaml := "claude_binary: /bin/true\n" +
+	yaml := "api_key_env: ANTHROPIC_API_KEY\n" +
 		"state_dir: " + stateDir + "\n"
 	if err := os.WriteFile(cfgPath, []byte(yaml), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -33,8 +33,8 @@ func TestBuildDispatcherWithConfig(t *testing.T) {
 	if cfg.Concurrency != 2 {
 		t.Errorf("Concurrency = %d, want 2 (default)", cfg.Concurrency)
 	}
-	if cfg.ClaudeBinary != "/bin/true" {
-		t.Errorf("ClaudeBinary = %q, want /bin/true", cfg.ClaudeBinary)
+	if cfg.APIKeyEnv != "ANTHROPIC_API_KEY" {
+		t.Errorf("APIKeyEnv = %q, want ANTHROPIC_API_KEY", cfg.APIKeyEnv)
 	}
 	if cfg.StateDir != stateDir {
 		t.Errorf("StateDir = %q, want %q", cfg.StateDir, stateDir)

@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"os/exec"
+
 	"github.com/leolaporte/obi-wan-core/internal/clients/r1"
 	"github.com/leolaporte/obi-wan-core/internal/clients/telegram"
 	"github.com/leolaporte/obi-wan-core/internal/clients/watch"
@@ -215,7 +217,13 @@ func buildDispatcherWithConfig(cfgPath string) (*core.Dispatcher, *config.Config
 	memRoot := expandHome("~/.claude/channels")
 	mem := memory.NewLoader(memRoot)
 
-	primary := core.NewClaudeRunner(cfg.ClaudeBinary, cfg.Model)
+	claudeBin, err := exec.LookPath("claude")
+	if err != nil {
+		// fall back to well-known install location
+		claudeBin = expandHome("~/.local/bin/claude")
+	}
+
+	primary := core.NewClaudeRunner(claudeBin, cfg.Model)
 
 	var tiers []core.FallbackTierConfig
 	if cfg.Fallback.Enabled {
@@ -239,7 +247,7 @@ func buildDispatcherWithConfig(cfgPath string) (*core.Dispatcher, *config.Config
 					extraEnv = append(extraEnv, "ANTHROPIC_AUTH_TOKEN="+authToken)
 				}
 			}
-			runner := core.NewClaudeRunnerWithEnv(cfg.ClaudeBinary, t.Model, extraEnv)
+			runner := core.NewClaudeRunnerWithEnv(claudeBin, t.Model, extraEnv)
 			tiers = append(tiers, core.FallbackTierConfig{
 				Runner: runner,
 				Label:  t.Label,

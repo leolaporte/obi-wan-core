@@ -10,12 +10,15 @@ import (
 
 // Config is the root config structure loaded from YAML.
 type Config struct {
-	ClaudeBinary string             `yaml:"claude_binary"`
-	StateDir     string             `yaml:"state_dir"`
-	Concurrency  int                `yaml:"concurrency"`
-	Model        string             `yaml:"model"`
-	Fallback     FallbackConfig     `yaml:"fallback"`
-	Channels     map[string]Channel `yaml:"channels"`
+	APIKeyEnv       string             `yaml:"api_key_env"`
+	BaseURL         string             `yaml:"base_url"`
+	StateDir        string             `yaml:"state_dir"`
+	Concurrency     int                `yaml:"concurrency"`
+	Model           string             `yaml:"model"`
+	EscalationModel string             `yaml:"escalation_model"`
+	TokenBudget     int                `yaml:"token_budget"`
+	Fallback        FallbackConfig     `yaml:"fallback"`
+	Channels        map[string]Channel `yaml:"channels"`
 }
 
 // FallbackTier describes a single fallback provider.
@@ -65,11 +68,14 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse yaml: %w", err)
 	}
 
-	if cfg.ClaudeBinary == "" {
-		return nil, fmt.Errorf("config: claude_binary is required")
+	if cfg.APIKeyEnv == "" {
+		return nil, fmt.Errorf("config: api_key_env is required")
 	}
 	if cfg.StateDir == "" {
 		return nil, fmt.Errorf("config: state_dir is required")
+	}
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = "https://api.anthropic.com"
 	}
 
 	if cfg.Concurrency == 0 {
@@ -81,7 +87,13 @@ func Load(path string) (*Config, error) {
 	}
 
 	if cfg.Model == "" {
-		cfg.Model = "sonnet"
+		cfg.Model = "claude-sonnet-4-6"
+	}
+	if cfg.EscalationModel == "" {
+		cfg.EscalationModel = "claude-opus-4-6"
+	}
+	if cfg.TokenBudget == 0 {
+		cfg.TokenBudget = 80000
 	}
 
 	for name, ch := range cfg.Channels {
