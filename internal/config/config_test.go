@@ -147,7 +147,7 @@ channels:
 	require.Contains(t, err.Error(), "concurrency")
 }
 
-func TestLoad_fallbackFields(t *testing.T) {
+func TestLoad_fallbackTiers(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	content := `
@@ -156,9 +156,15 @@ state_dir: /tmp/obi-wan-core-test
 model: opus
 fallback:
   enabled: true
-  base_url: https://api.z.ai/api/anthropic
-  api_key_env: ZAI_API_KEY
-  fallback_model: glm-5.1
+  tiers:
+    - base_url: https://api.z.ai/api/anthropic
+      api_key_env: ZAI_API_KEY
+      model: glm-5.1
+      label: GLM
+    - base_url: http://localhost:11434
+      auth_token: ollama
+      model: qwen3.5:35b
+      label: Ollama
 channels:
   telegram:
     enabled: true
@@ -170,9 +176,15 @@ channels:
 	require.NoError(t, err)
 	require.Equal(t, "opus", cfg.Model)
 	require.True(t, cfg.Fallback.Enabled)
-	require.Equal(t, "https://api.z.ai/api/anthropic", cfg.Fallback.BaseURL)
-	require.Equal(t, "ZAI_API_KEY", cfg.Fallback.APIKeyEnv)
-	require.Equal(t, "glm-5.1", cfg.Fallback.FallbackModel)
+	require.Len(t, cfg.Fallback.Tiers, 2)
+	require.Equal(t, "https://api.z.ai/api/anthropic", cfg.Fallback.Tiers[0].BaseURL)
+	require.Equal(t, "ZAI_API_KEY", cfg.Fallback.Tiers[0].APIKeyEnv)
+	require.Equal(t, "glm-5.1", cfg.Fallback.Tiers[0].Model)
+	require.Equal(t, "GLM", cfg.Fallback.Tiers[0].Label)
+	require.Equal(t, "http://localhost:11434", cfg.Fallback.Tiers[1].BaseURL)
+	require.Equal(t, "ollama", cfg.Fallback.Tiers[1].AuthToken)
+	require.Equal(t, "qwen3.5:35b", cfg.Fallback.Tiers[1].Model)
+	require.Equal(t, "Ollama", cfg.Fallback.Tiers[1].Label)
 }
 
 func TestLoad_modelDefaultsToSonnet(t *testing.T) {

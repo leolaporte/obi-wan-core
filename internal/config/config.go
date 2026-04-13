@@ -18,12 +18,19 @@ type Config struct {
 	Channels     map[string]Channel `yaml:"channels"`
 }
 
-// FallbackConfig holds the alternate provider configuration.
+// FallbackTier describes a single fallback provider.
+type FallbackTier struct {
+	BaseURL   string `yaml:"base_url"`
+	APIKeyEnv string `yaml:"api_key_env"`
+	AuthToken string `yaml:"auth_token,omitempty"`
+	Model     string `yaml:"model"`
+	Label     string `yaml:"label"`
+}
+
+// FallbackConfig holds the fallback provider chain configuration.
 type FallbackConfig struct {
-	Enabled       bool   `yaml:"enabled"`
-	BaseURL       string `yaml:"base_url"`
-	APIKeyEnv     string `yaml:"api_key_env"`
-	FallbackModel string `yaml:"fallback_model"`
+	Enabled bool           `yaml:"enabled"`
+	Tiers   []FallbackTier `yaml:"tiers"`
 }
 
 // Channel is the per-channel configuration.
