@@ -45,3 +45,16 @@ channels:
     webhook_key_env: OBI_WAN_CORE_WEBHOOK_KEY
   r1:
     enabled: false
+  esp:
+    enabled: false
+    open_access: true
+    webhook_port: 9090
+    # Leave webhook_key_env blank for LAN-only deployments, or set it to
+    # an env var name whose value must be passed as ?key= or X-Pax-Key.
+    # webhook_key_env: ESP_WEBHOOK_KEY
+    watch_chat_id_env: WATCH_CHAT_ID   # mirror ESP replies into Leo's Telegram DM
+    whisper_url: http://localhost:8002/transcribe
+    piper_url: http://localhost:8888/synthesize
+    piper_voice: main
+    sample_rate: 16000
+    system_prompt_file: /home/leo/.claude/channels/esp/system-prompt.md

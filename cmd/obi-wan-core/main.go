@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/leolaporte/obi-wan-core/internal/clients/esp"
 	"github.com/leolaporte/obi-wan-core/internal/clients/r1"
 	"github.com/leolaporte/obi-wan-core/internal/clients/telegram"
 	"github.com/leolaporte/obi-wan-core/internal/clients/watch"
@@ -151,10 +152,60 @@ func runServe(args []string) error {
 		slog.Info("r1 gateway launched", "port", ch.WebhookPort)
 	}
 
+	if ch, ok := cfg.Channels["esp"]; ok && ch.Enabled {
+		if ch.WhisperURL == "" || ch.PiperURL == "" {
+			return fmt.Errorf("esp enabled but whisper_url or piper_url is empty")
+		}
+		key := ""
+		if ch.WebhookKeyEnv != "" {
+			key = os.Getenv(ch.WebhookKeyEnv)
+		}
+		var echo esp.Echo = esp.NoOpEcho{}
+		if chatID := os.Getenv(ch.WatchChatIDEnv); chatID != "" && tgClient != nil {
+			echo = &espTelegramEcho{client: tgClient, chatID: chatID}
+			slog.Info("esp echo wired to telegram", "chatID", chatID)
+		} else if ch.WatchChatIDEnv != "" {
+			slog.Info("esp echo disabled",
+				"reason", "env var empty or telegram not configured",
+				"env", ch.WatchChatIDEnv,
+			)
+		}
+		srv := esp.NewServer(esp.Config{
+			Port:       ch.WebhookPort,
+			WebhookKey: key,
+			Channel:    "esp",
+			UserLabel:  "esp",
+			WhisperURL: ch.WhisperURL,
+			PiperURL:   ch.PiperURL,
+			PiperVoice: ch.PiperVoice,
+			SampleRate: ch.SampleRate,
+			NotifyURL:  ch.NotifyURL,
+		}, d, echo)
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := srv.Start(ctx); err != nil {
+				slog.Error("esp server stopped", "error", err)
+			}
+		}()
+		slog.Info("esp server launched", "port", ch.WebhookPort)
+	}
+
 	<-ctx.Done()
 	slog.Info("obi-wan-core shutting down")
 	wg.Wait()
 	return nil
+}
+
+// espTelegramEcho mirrors ESP replies into Leo's Telegram DM.
+type espTelegramEcho struct {
+	client *telegram.Client
+	chatID string
+}
+
+func (t *espTelegramEcho) Echo(ctx context.Context, text string) {
+	t.client.SendToChat(ctx, t.chatID, text)
 }
 
 // telegramEcho adapts a telegram Client to the watch.Echo interface so

@@ -61,6 +61,13 @@ type Channel struct {
 	// R1 shim
 	BootstrapTokenEnv string `yaml:"bootstrap_token_env,omitempty"`
 	DeviceStatePath   string `yaml:"device_state_path,omitempty"`
+
+	// ESP32 voice webhook
+	WhisperURL string `yaml:"whisper_url,omitempty"`
+	PiperURL   string `yaml:"piper_url,omitempty"`
+	PiperVoice string `yaml:"piper_voice,omitempty"`
+	SampleRate int    `yaml:"sample_rate,omitempty"`
+	NotifyURL  string `yaml:"notify_url,omitempty"`
 }
 
 // Load reads a YAML config file and validates required fields.
