@@ -23,7 +23,15 @@ fallback:
 # Tool support (optional)
 vault_root: ~/Obsidian/lgl
 fastmail_token_env: FASTMAIL_API_TOKEN
-fastmail_user: your_email@fastmail.com
+# IMPORTANT: fastmail_user is the CalDAV/CardDAV basic-auth login, which on
+# Fastmail can differ from your primary send-from address. If you've ever
+# changed addresses or use an alias, the canonical login is the original
+# account name (often visible at Settings → Privacy → Connected Apps as the
+# username you authenticate with). Using the wrong value here returns 401
+# with body "Incorrect username, password or access token." even when the
+# password is correct. Find yours via PROPFIND on /dav/principals/ or check
+# your Fastmail account settings.
+fastmail_user: your_dav_login@example.com
 fastmail_password_env: FASTMAIL_PASSWORD
 claude_binary: claude
 
