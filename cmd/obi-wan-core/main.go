@@ -269,11 +269,31 @@ func buildDispatcherWithConfig(cfgPath string) (*core.Dispatcher, *config.Config
 			}
 		}
 
+		// Discover the JMAP account id for contacts. Fastmail rejects the
+		// "primary" placeholder in requests; we must pass the real id
+		// (e.g. "uXXXXXXXX") from /jmap/session primaryAccounts[contacts].
+		// Non-fatal: on failure the handlers fall back to "primary",
+		// which will surface as a clear JMAP error in the logs rather
+		// than a silent success.
+		var contactAccountID string
+		if fmToken != "" {
+			discoverCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			id, err := tools.DiscoverJMAPContactAccount(discoverCtx, "https://api.fastmail.com/jmap/session", fmToken)
+			cancel()
+			if err != nil {
+				slog.Warn("fastmail jmap account discovery failed; falling back to 'primary'", "err", err)
+			} else {
+				contactAccountID = id
+				slog.Info("fastmail jmap contact account discovered", "account_id", id)
+			}
+		}
+
 		tools.RegisterFastmailTools(registry,
 			caldavURL,
 			cfg.FastmailUser, fmPassword,
 			"https://api.fastmail.com/jmap/api/", fmToken,
 			calendarPaths,
+			contactAccountID,
 		)
 		slog.Info("fastmail tools registered")
 	}

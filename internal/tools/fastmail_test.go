@@ -180,6 +180,55 @@ func TestFastmailCreateEvent_UsesDiscoveredCalendarPath(t *testing.T) {
 	require.Contains(t, requestedPath, "/dav/calendars/user/u@fastmail.com/Default/")
 }
 
+// TestFastmailCreateContact_UsesProvidedAccountID verifies that the
+// handler sends the discovered Fastmail account ID in the JMAP method
+// call, not the hardcoded "primary". Fastmail rejects "primary" — you
+// must pass the actual account id (e.g. uXXXXXXXX) from /jmap/session
+// primaryAccounts[contacts].
+func TestFastmailCreateContact_UsesProvidedAccountID(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"methodResponses":[["ContactCard/set",{"created":{"c1":{"id":"x"}}},"0"]]}`))
+	}))
+	defer srv.Close()
+
+	handler := FastmailCreateContactHandlerForAccount(srv.URL, "fmu1-tok", "uXXXXXXXX")
+	raw, _ := json.Marshal(fastmailContactInput{Name: "Alice"})
+	_, err := handler(context.Background(), raw)
+	require.NoError(t, err)
+
+	calls, _ := captured["methodCalls"].([]any)
+	require.Len(t, calls, 1)
+	first, _ := calls[0].([]any)
+	require.Len(t, first, 3)
+	args, _ := first[1].(map[string]any)
+	require.Equal(t, "uXXXXXXXX", args["accountId"])
+}
+
+func TestDiscoverJMAPContactAccount_PicksContactsPrimary(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "Bearer fmu1-tok", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"primaryAccounts": {
+				"urn:ietf:params:jmap:mail": "uXXXXXXXX",
+				"urn:ietf:params:jmap:contacts": "uXXXXXXXX",
+				"urn:ietf:params:jmap:submission": "uXXXXXXXX"
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	got, err := DiscoverJMAPContactAccount(context.Background(), srv.URL, "fmu1-tok")
+	require.NoError(t, err)
+	require.Equal(t, "uXXXXXXXX", got)
+}
+
 func TestDiscoverCalendars_ParsesPROPFIND(t *testing.T) {
 	const body = `<?xml version="1.0" encoding="UTF-8"?>
 <D:multistatus xmlns:D="DAV:">

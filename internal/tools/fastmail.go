@@ -190,8 +190,17 @@ func FastmailCreateEventHandler(caldavURL, user, password string, calendarPaths 
 	}
 }
 
-// FastmailCreateContactHandler returns a HandlerFunc that creates a contact via JMAP.
+// FastmailCreateContactHandler returns a HandlerFunc that creates a contact
+// via JMAP using "primary" as the accountId. Prefer
+// FastmailCreateContactHandlerForAccount with a discovered account id —
+// Fastmail's JMAP rejects "primary" and requires the real account id
+// (e.g. "uXXXXXXXX") from /jmap/session primaryAccounts[contacts].
 func FastmailCreateContactHandler(jmapURL, token string) HandlerFunc {
+	return FastmailCreateContactHandlerForAccount(jmapURL, token, "primary")
+}
+
+// FastmailCreateContactHandlerForAccount is the account-aware variant.
+func FastmailCreateContactHandlerForAccount(jmapURL, token, accountID string) HandlerFunc {
 	return func(ctx context.Context, raw json.RawMessage) (string, error) {
 		var in fastmailContactInput
 		if err := json.Unmarshal(raw, &in); err != nil {
@@ -235,7 +244,7 @@ func FastmailCreateContactHandler(jmapURL, token string) HandlerFunc {
 				[]any{
 					"ContactCard/set",
 					map[string]any{
-						"accountId": "primary",
+						"accountId": accountID,
 						"create": map[string]any{
 							"c1": card,
 						},
@@ -249,9 +258,15 @@ func FastmailCreateContactHandler(jmapURL, token string) HandlerFunc {
 	}
 }
 
-// FastmailSearchContactsHandler returns a HandlerFunc that searches contacts via JMAP.
-// Returns the raw JMAP response body for Claude to format.
+// FastmailSearchContactsHandler returns a HandlerFunc that searches contacts
+// via JMAP using "primary" as the accountId. Prefer
+// FastmailSearchContactsHandlerForAccount with a discovered account id.
 func FastmailSearchContactsHandler(jmapURL, token string) HandlerFunc {
+	return FastmailSearchContactsHandlerForAccount(jmapURL, token, "primary")
+}
+
+// FastmailSearchContactsHandlerForAccount is the account-aware variant.
+func FastmailSearchContactsHandlerForAccount(jmapURL, token, accountID string) HandlerFunc {
 	return func(ctx context.Context, raw json.RawMessage) (string, error) {
 		var in fastmailSearchInput
 		if err := json.Unmarshal(raw, &in); err != nil {
@@ -267,7 +282,7 @@ func FastmailSearchContactsHandler(jmapURL, token string) HandlerFunc {
 				[]any{
 					"ContactCard/query",
 					map[string]any{
-						"accountId": "primary",
+						"accountId": accountID,
 						"filter": map[string]any{
 							"text": in.Query,
 						},
@@ -278,7 +293,7 @@ func FastmailSearchContactsHandler(jmapURL, token string) HandlerFunc {
 				[]any{
 					"ContactCard/get",
 					map[string]any{
-						"accountId": "primary",
+						"accountId": accountID,
 						"#ids": map[string]any{
 							"resultOf": "0",
 							"name":     "ContactCard/query",
@@ -298,7 +313,13 @@ func FastmailSearchContactsHandler(jmapURL, token string) HandlerFunc {
 // RegisterFastmailTools registers all three Fastmail tools with the registry.
 // calendarPaths is an optional display-name → path map (lowercased keys)
 // discovered via DiscoverCalendars; pass nil to skip the lookup layer.
-func RegisterFastmailTools(r *Registry, caldavURL, user, password, jmapURL, token string, calendarPaths map[string]string) {
+// contactAccountID is the Fastmail account id for JMAP contact calls
+// (discovered via DiscoverJMAPContactAccount); pass "" to fall back to
+// the legacy "primary" keyword, which Fastmail rejects in practice.
+func RegisterFastmailTools(r *Registry, caldavURL, user, password, jmapURL, token string, calendarPaths map[string]string, contactAccountID string) {
+	if contactAccountID == "" {
+		contactAccountID = "primary"
+	}
 	r.Register(Tool{
 		Name:        "fastmail_create_event",
 		Description: "Create a calendar event in Fastmail via CalDAV. Provide a title, ISO 8601 start time (e.g. \"2026-04-15T14:00:00\"), ISO 8601 duration (e.g. \"PT1H\"), optional location, and optional calendar name (defaults to \"Personal\").",
@@ -360,7 +381,7 @@ func RegisterFastmailTools(r *Registry, caldavURL, user, password, jmapURL, toke
 			},
 			"required": ["name"]
 		}`),
-		Handler: FastmailCreateContactHandler(jmapURL, token),
+		Handler: FastmailCreateContactHandlerForAccount(jmapURL, token, contactAccountID),
 	})
 
 	r.Register(Tool{
@@ -376,7 +397,7 @@ func RegisterFastmailTools(r *Registry, caldavURL, user, password, jmapURL, toke
 			},
 			"required": ["query"]
 		}`),
-		Handler: FastmailSearchContactsHandler(jmapURL, token),
+		Handler: FastmailSearchContactsHandlerForAccount(jmapURL, token, contactAccountID),
 	})
 }
 
@@ -465,4 +486,61 @@ func DiscoverCalendars(ctx context.Context, caldavURL, user, password string) (m
 		out[strings.ToLower(name)] = pathSegment
 	}
 	return out, nil
+}
+
+// --- JMAP account discovery ---
+
+// jmapSession captures the subset of Fastmail's /jmap/session response we
+// need: the primaryAccounts map, keyed by capability URI, whose values
+// are the account IDs Fastmail expects in every subsequent JMAP call.
+type jmapSession struct {
+	PrimaryAccounts map[string]string `json:"primaryAccounts"`
+}
+
+// DiscoverJMAPContactAccount fetches /jmap/session with the given token
+// and returns primaryAccounts["urn:ietf:params:jmap:contacts"] — the
+// real Fastmail account id (e.g. "uXXXXXXXX") for contact operations.
+// Returns an error on auth failure or if the contacts capability isn't
+// exposed for the token's account.
+//
+// sessionURL is the full session endpoint, not the API endpoint. For
+// Fastmail: https://api.fastmail.com/jmap/session.
+func DiscoverJMAPContactAccount(ctx context.Context, sessionURL, token string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sessionURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("build session request: %w", err)
+	}
+	authHeader := token
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		authHeader = "Bearer " + authHeader
+	}
+	req.Header.Set("Authorization", authHeader)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("jmap session transport: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("jmap session returned %d: %s", resp.StatusCode, truncateStr(string(body), 200))
+	}
+
+	var sess jmapSession
+	if err := json.Unmarshal(body, &sess); err != nil {
+		return "", fmt.Errorf("parse jmap session: %w", err)
+	}
+	id := sess.PrimaryAccounts["urn:ietf:params:jmap:contacts"]
+	if id == "" {
+		return "", fmt.Errorf("no contacts primaryAccount in session; capabilities available: %v", keysOf(sess.PrimaryAccounts))
+	}
+	return id, nil
+}
+
+func keysOf(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
