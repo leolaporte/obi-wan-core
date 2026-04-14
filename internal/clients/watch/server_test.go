@@ -123,7 +123,7 @@ func TestHandler_dispatchErrorReturns500(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, rr.Code)
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
-	require.Equal(t, "boom", body["error"])
+	require.Equal(t, "internal error", body["error"])
 }
 
 func TestHandler_oversizedBodyReturns400(t *testing.T) {

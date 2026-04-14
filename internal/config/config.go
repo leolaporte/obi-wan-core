@@ -10,10 +10,37 @@ import (
 
 // Config is the root config structure loaded from YAML.
 type Config struct {
-	ClaudeBinary string             `yaml:"claude_binary"`
-	StateDir     string             `yaml:"state_dir"`
-	Concurrency  int                `yaml:"concurrency"`
-	Channels     map[string]Channel `yaml:"channels"`
+	APIKeyEnv       string             `yaml:"api_key_env"`
+	BaseURL         string             `yaml:"base_url"`
+	StateDir        string             `yaml:"state_dir"`
+	Concurrency     int                `yaml:"concurrency"`
+	Model           string             `yaml:"model"`
+	EscalationModel string             `yaml:"escalation_model"`
+	TokenBudget     int                `yaml:"token_budget"`
+	Fallback        FallbackConfig     `yaml:"fallback"`
+	Channels        map[string]Channel `yaml:"channels"`
+
+	// Tool support
+	VaultRoot           string `yaml:"vault_root"`
+	FastmailTokenEnv    string `yaml:"fastmail_token_env"`
+	FastmailUser        string `yaml:"fastmail_user"`
+	FastmailPasswordEnv string `yaml:"fastmail_password_env"`
+	ClaudeBinary        string `yaml:"claude_binary"`
+}
+
+// FallbackTier describes a single fallback provider.
+type FallbackTier struct {
+	BaseURL   string `yaml:"base_url"`
+	APIKeyEnv string `yaml:"api_key_env"`
+	AuthTokenEnv string `yaml:"auth_token_env,omitempty"`
+	Model     string `yaml:"model"`
+	Label     string `yaml:"label"`
+}
+
+// FallbackConfig holds the fallback provider chain configuration.
+type FallbackConfig struct {
+	Enabled bool           `yaml:"enabled"`
+	Tiers   []FallbackTier `yaml:"tiers"`
 }
 
 // Channel is the per-channel configuration.
@@ -48,11 +75,14 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse yaml: %w", err)
 	}
 
-	if cfg.ClaudeBinary == "" {
-		return nil, fmt.Errorf("config: claude_binary is required")
+	if cfg.APIKeyEnv == "" {
+		return nil, fmt.Errorf("config: api_key_env is required")
 	}
 	if cfg.StateDir == "" {
 		return nil, fmt.Errorf("config: state_dir is required")
+	}
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = "https://api.anthropic.com"
 	}
 
 	if cfg.Concurrency == 0 {
@@ -61,6 +91,16 @@ func Load(path string) (*Config, error) {
 
 	if cfg.Concurrency < 1 {
 		return nil, fmt.Errorf("config: concurrency must be >= 1, got %d", cfg.Concurrency)
+	}
+
+	if cfg.Model == "" {
+		cfg.Model = "claude-sonnet-4-6"
+	}
+	if cfg.EscalationModel == "" {
+		cfg.EscalationModel = "claude-opus-4-6"
+	}
+	if cfg.TokenBudget == 0 {
+		cfg.TokenBudget = 80000
 	}
 
 	for name, ch := range cfg.Channels {

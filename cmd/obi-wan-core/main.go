@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sync"
@@ -19,6 +21,7 @@ import (
 	"github.com/leolaporte/obi-wan-core/internal/config"
 	"github.com/leolaporte/obi-wan-core/internal/core"
 	"github.com/leolaporte/obi-wan-core/internal/memory"
+	"github.com/leolaporte/obi-wan-core/internal/tools"
 )
 
 const defaultConfigPath = "~/.config/obi-wan-core/config.yaml"
@@ -205,19 +208,112 @@ func buildDispatcherWithConfig(cfgPath string) (*core.Dispatcher, *config.Config
 		return nil, nil, fmt.Errorf("load config: %w", err)
 	}
 
-	sessions, err := core.NewSessionStore(cfg.StateDir)
-	if err != nil {
-		return nil, nil, fmt.Errorf("session store: %w", err)
+	// Resolve primary API key.
+	apiKey := os.Getenv(cfg.APIKeyEnv)
+	if apiKey == "" {
+		return nil, nil, fmt.Errorf("%s is empty", cfg.APIKeyEnv)
 	}
 
-	// Memory lives under ~/.claude/channels by convention, not under
-	// state_dir — shared with Claude Code's existing channel memory.
+	// Ensure state dir exists.
+	if err := os.MkdirAll(cfg.StateDir, 0700); err != nil {
+		return nil, nil, fmt.Errorf("create state dir: %w", err)
+	}
+
+	// Unified history shared across all channels.
+	history := core.NewHistory(filepath.Join(cfg.StateDir, "history.json"), cfg.TokenBudget)
+
+	// Memory lives under ~/.claude/channels by convention.
 	memRoot := expandHome("~/.claude/channels")
 	mem := memory.NewLoader(memRoot)
 
-	runner := core.NewClaudeRunner(cfg.ClaudeBinary, "sonnet")
+	// Primary API client.
+	primary := core.NewAPIClient(cfg.BaseURL, apiKey, cfg.Model)
 
-	return core.NewDispatcher(cfg, core.NewAccess(cfg), sessions, mem, runner), cfg, nil
+	// Tool registry.
+	registry := tools.NewRegistry()
+
+	// Obsidian tools (if vault_root configured).
+	if cfg.VaultRoot != "" {
+		vaultRoot := expandHome(cfg.VaultRoot)
+		tools.RegisterObsidianTools(registry, vaultRoot)
+		slog.Info("obsidian tools registered", "vault", vaultRoot)
+	}
+
+	// Fastmail tools (if credentials configured).
+	if cfg.FastmailTokenEnv != "" || cfg.FastmailUser != "" {
+		fmToken := os.Getenv(cfg.FastmailTokenEnv)
+		fmPassword := ""
+		if cfg.FastmailPasswordEnv != "" {
+			fmPassword = os.Getenv(cfg.FastmailPasswordEnv)
+		}
+		tools.RegisterFastmailTools(registry,
+			"https://caldav.fastmail.com",
+			cfg.FastmailUser, fmPassword,
+			"https://api.fastmail.com/jmap/api/", fmToken,
+		)
+		slog.Info("fastmail tools registered")
+	}
+
+	// Spawn claude tool (if binary configured or found in PATH).
+	claudeBin := cfg.ClaudeBinary
+	if claudeBin == "" {
+		if found, err := exec.LookPath("claude"); err == nil {
+			claudeBin = found
+		}
+	} else {
+		claudeBin = expandHome(claudeBin)
+	}
+	if claudeBin != "" {
+		tools.RegisterClaudeTools(registry, claudeBin)
+		slog.Info("spawn_claude_code tool registered", "binary", claudeBin)
+	}
+
+	// Wire tools into API client.
+	schemas := registry.Schemas()
+	if len(schemas) > 0 {
+		rawSchemas := make([]json.RawMessage, len(schemas))
+		for i, s := range schemas {
+			rawSchemas[i], _ = json.Marshal(s)
+		}
+		primary.SetToolSchemas(rawSchemas)
+		primary.SetToolExecutor(registry.Execute)
+	}
+
+	// Fallback tiers.
+	var tiers []core.FallbackTier
+	if cfg.Fallback.Enabled {
+		for _, t := range cfg.Fallback.Tiers {
+			tierAPIKey := ""
+			if t.APIKeyEnv != "" {
+				tierAPIKey = os.Getenv(t.APIKeyEnv)
+			}
+			if t.AuthTokenEnv != "" {
+				if tok := os.Getenv(t.AuthTokenEnv); tok != "" {
+					tierAPIKey = tok
+				}
+			}
+			if tierAPIKey == "" {
+				slog.Warn("fallback tier has no usable key; skipping",
+					"label", t.Label,
+				)
+				continue
+			}
+			client := core.NewAPIClient(t.BaseURL, tierAPIKey, t.Model)
+			tiers = append(tiers, core.FallbackTier{
+				Client: client,
+				Label:  t.Label,
+			})
+			slog.Info("fallback tier configured",
+				"label", t.Label,
+				"base_url", t.BaseURL,
+				"model", t.Model,
+			)
+		}
+	}
+
+	fb := core.NewFallbackRunner(primary, tiers)
+
+	return core.NewDispatcher(cfg, core.NewAccess(cfg), history, mem, fb), cfg, nil
 }
 
 // buildDispatcher is the dispatch-subcommand entry point; it discards cfg.

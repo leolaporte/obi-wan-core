@@ -134,7 +134,10 @@ func TestHandshake_BadBootstrapFails(t *testing.T) {
 	}
 }
 
-func TestHandshake_NonNodeRoleRejected(t *testing.T) {
+// TestHandshake_UnknownRoleRejected — "node" and "operator" are both valid
+// (the real R1 firmware sends operator even though it's a node). Any other
+// role value should still be rejected as INVALID_REQUEST.
+func TestHandshake_UnknownRoleRejected(t *testing.T) {
 	store, _ := OpenDeviceStore(filepath.Join(t.TempDir(), "r1.json"))
 	h := NewHandshake(HandshakeConfig{
 		BootstrapToken: "boot-xyz",
@@ -142,11 +145,11 @@ func TestHandshake_NonNodeRoleRejected(t *testing.T) {
 		Nonce:          "n",
 	})
 	pubB64, priv := newPair(t)
-	params := buildConnectParams(t, pubB64, priv, "n", "boot-xyz", "operator")
+	params := buildConnectParams(t, pubB64, priv, "n", "boot-xyz", "admin")
 
 	_, errShape := h.Handle(params)
 	if errShape == nil || errShape.Code != ErrCodeInvalidRequest {
-		t.Fatalf("expected INVALID_REQUEST, got %+v", errShape)
+		t.Fatalf("expected INVALID_REQUEST for role=admin, got %+v", errShape)
 	}
 }
 

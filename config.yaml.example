@@ -1,8 +1,31 @@
 # obi-wan-core configuration
 # Copy to ~/.config/obi-wan-core/config.yaml and edit.
 
-claude_binary: /home/leo/.local/bin/claude
+api_key_env: ANTHROPIC_API_KEY
+base_url: https://api.anthropic.com
 state_dir: /home/leo/.local/state/obi-wan-core
+model: claude-sonnet-4-6
+escalation_model: claude-opus-4-6
+token_budget: 80000
+
+fallback:
+  enabled: true
+  tiers:
+    - base_url: https://api.z.ai/api/anthropic
+      api_key_env: ZAI_API_KEY
+      model: glm-5.1
+      label: GLM
+    - base_url: http://localhost:11434
+      auth_token_env: OLLAMA_AUTH_TOKEN
+      model: gemma4:latest
+      label: Ollama
+
+# Tool support (optional)
+vault_root: ~/Obsidian/lgl
+fastmail_token_env: FASTMAIL_API_TOKEN
+fastmail_user: your_email@fastmail.com
+fastmail_password_env: FASTMAIL_PASSWORD
+claude_binary: claude
 
 channels:
   telegram:
@@ -11,6 +34,6 @@ channels:
       - "YOUR_TELEGRAM_USER_ID"
   watch:
     enabled: true
-    webhook_key: "set-via-env-OBI_WAN_CORE_WEBHOOK_KEY"
+    webhook_key_env: OBI_WAN_CORE_WEBHOOK_KEY
   r1:
-    enabled: false  # Plan 3 — not wired up yet
+    enabled: false

@@ -158,14 +158,43 @@ func TestServer_FullHandshakeAndSend(t *testing.T) {
 	if sendRes.ID != "req-2" {
 		t.Errorf("response ID mismatch: got %q want %q", sendRes.ID, "req-2")
 	}
-	var sendPayload struct {
-		Text string `json:"text"`
+	// sessions.send now returns an immediate ACK; the real reply arrives
+	// as an async "chat" event.
+	var ack struct {
+		RunID  string `json:"runId"`
+		Status string `json:"status"`
 	}
-	if err := json.Unmarshal(sendRes.Payload, &sendPayload); err != nil {
-		t.Fatalf("parse send res: %v", err)
+	if err := json.Unmarshal(sendRes.Payload, &ack); err != nil {
+		t.Fatalf("parse send ack: %v", err)
 	}
-	if sendPayload.Text != "reply-to:ping" {
-		t.Errorf("bad reply: %q", sendPayload.Text)
+	if ack.Status != "started" {
+		t.Errorf("bad ack status: %q", ack.Status)
+	}
+
+	// Now read the async chat event that carries the dispatcher reply.
+	var chatFrame Frame
+	if err := wsjson.Read(ctx, c, &chatFrame); err != nil {
+		t.Fatalf("read chat event: %v", err)
+	}
+	if chatFrame.Type != FrameTypeEvent || chatFrame.Event != "chat" {
+		t.Fatalf("expected chat event, got: %+v", chatFrame)
+	}
+	var chatPayload struct {
+		State   string `json:"state"`
+		Message struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(chatFrame.Payload, &chatPayload); err != nil {
+		t.Fatalf("parse chat event: %v", err)
+	}
+	if chatPayload.State != "final" {
+		t.Errorf("bad chat state: %q", chatPayload.State)
+	}
+	if len(chatPayload.Message.Content) == 0 || chatPayload.Message.Content[0].Text != "reply-to:ping" {
+		t.Errorf("bad chat content: %+v", chatPayload.Message)
 	}
 
 	// Clean shutdown.
