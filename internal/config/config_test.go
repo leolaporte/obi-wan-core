@@ -218,7 +218,7 @@ api_key_env: ANTHROPIC_API_KEY
 state_dir: /tmp/obi-wan-core-test
 vault_root: ~/Obsidian/lgl
 fastmail_token_env: FASTMAIL_API_TOKEN
-fastmail_user: leo@fastmail.com
+fastmail_user: user@example.com
 fastmail_password_env: FASTMAIL_PASSWORD
 claude_binary: /home/leo/.local/bin/claude
 channels:
@@ -232,7 +232,7 @@ channels:
 	require.NoError(t, err)
 	require.Equal(t, "~/Obsidian/lgl", cfg.VaultRoot)
 	require.Equal(t, "FASTMAIL_API_TOKEN", cfg.FastmailTokenEnv)
-	require.Equal(t, "leo@fastmail.com", cfg.FastmailUser)
+	require.Equal(t, "user@example.com", cfg.FastmailUser)
 	require.Equal(t, "FASTMAIL_PASSWORD", cfg.FastmailPasswordEnv)
 	require.Equal(t, "/home/leo/.local/bin/claude", cfg.ClaudeBinary)
 }
