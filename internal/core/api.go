@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 const maxToolIterations = 10
@@ -31,13 +32,20 @@ type SendArgs struct {
 	Model    string    // override model (empty = use client default)
 }
 
+// apiHTTPTimeout caps a single Anthropic Messages API request. Generous
+// because long tool-loop responses can run several seconds, and the
+// fallback chain still needs room to retry the next tier within the
+// dispatch deadline. Per-call cancellation still flows through the
+// request context; this is just a backstop against a truly stuck TCP.
+const apiHTTPTimeout = 90 * time.Second
+
 // NewAPIClient constructs an APIClient.
 func NewAPIClient(baseURL, apiKey, model string) *APIClient {
 	return &APIClient{
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		model:   model,
-		http:    &http.Client{},
+		http:    &http.Client{Timeout: apiHTTPTimeout},
 	}
 }
 

@@ -34,6 +34,15 @@ type fastmailCreateEventInput struct {
 // "Pacific/Honolulu" or "Asia/Bangkok" or whichever matches.
 const defaultEventTimezone = "America/Los_Angeles"
 
+// fastmailHTTPClient backstops every Fastmail HTTP call with a wall-clock
+// timeout. The handlers also honor the per-request context (which carries
+// the dispatch deadline), but a misbehaving Fastmail or stalled TCP
+// connection that ignores context cancellation would otherwise hold a
+// dispatch goroutine open until something else timed out. 30s is well
+// above normal CalDAV/JMAP latency (typically <1s) and below anything
+// a Telegram or R1 user would tolerate waiting for.
+var fastmailHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 type fastmailContactInput struct {
 	Name    string `json:"name"`
 	Email   string `json:"email"`
@@ -111,7 +120,7 @@ func doJMAP(ctx context.Context, jmapURL, token string, body any, successMsg str
 
 	slog.Info("fastmail jmap request", "url", jmapURL)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := fastmailHTTPClient.Do(req)
 	if err != nil {
 		slog.Warn("fastmail jmap transport error", "err", err)
 		return fmt.Sprintf("error: JMAP request failed: %v", err), nil
@@ -190,7 +199,7 @@ func FastmailCreateEventHandler(caldavURL, user, password string, calendarPaths 
 		req.Header.Set("Content-Type", "text/calendar; charset=utf-8")
 		req.SetBasicAuth(user, password)
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := fastmailHTTPClient.Do(req)
 		if err != nil {
 			slog.Warn("fastmail caldav transport error", "err", err)
 			return fmt.Sprintf("error: CalDAV request failed: %v", err), nil
@@ -465,7 +474,7 @@ func DiscoverCalendars(ctx context.Context, caldavURL, user, password string) (m
 	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
 	req.SetBasicAuth(user, password)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := fastmailHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("PROPFIND transport: %w", err)
 	}
@@ -538,7 +547,7 @@ func DiscoverJMAPContactAccount(ctx context.Context, sessionURL, token string) (
 	}
 	req.Header.Set("Authorization", authHeader)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := fastmailHTTPClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("jmap session transport: %w", err)
 	}
