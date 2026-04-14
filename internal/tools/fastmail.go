@@ -22,7 +22,17 @@ type fastmailCreateEventInput struct {
 	Duration string `json:"duration"` // ISO 8601 e.g. "PT1H"
 	Location string `json:"location"`
 	Calendar string `json:"calendar"` // defaults to "Personal"
+	// Timezone is an IANA zone name (e.g. "America/Los_Angeles", "Asia/Bangkok")
+	// used to interpret a naive Start timestamp. Defaults to America/Los_Angeles
+	// since that's where Leo lives. Without this, a naive "10am" got stored
+	// as 10:00 UTC, which displays as 03:00 Pacific.
+	Timezone string `json:"timezone"`
 }
+
+// defaultEventTimezone is the IANA zone applied when input.Timezone is
+// empty. Pacific because that's Leo's home zone; for travel he'd pass
+// "Pacific/Honolulu" or "Asia/Bangkok" or whichever matches.
+const defaultEventTimezone = "America/Los_Angeles"
 
 type fastmailContactInput struct {
 	Name    string `json:"name"`
@@ -152,7 +162,15 @@ func FastmailCreateEventHandler(caldavURL, user, password string, calendarPaths 
 			in.Calendar = "Default"
 		}
 
-		start, err := time.Parse("2006-01-02T15:04:05", in.Start)
+		zoneName := in.Timezone
+		if zoneName == "" {
+			zoneName = defaultEventTimezone
+		}
+		loc, err := time.LoadLocation(zoneName)
+		if err != nil {
+			return fmt.Sprintf("error: unknown timezone %q: %v", zoneName, err), nil
+		}
+		start, err := time.ParseInLocation("2006-01-02T15:04:05", in.Start, loc)
 		if err != nil {
 			return fmt.Sprintf("error: invalid start time %q: %v", in.Start, err), nil
 		}
@@ -322,7 +340,7 @@ func RegisterFastmailTools(r *Registry, caldavURL, user, password, jmapURL, toke
 	}
 	r.Register(Tool{
 		Name:        "fastmail_create_event",
-		Description: "Create a calendar event in Fastmail via CalDAV. Provide a title, ISO 8601 start time (e.g. \"2026-04-15T14:00:00\"), ISO 8601 duration (e.g. \"PT1H\"), optional location, and optional calendar name (defaults to \"Personal\").",
+		Description: "Create a calendar event in Fastmail via CalDAV. Provide a title, naive ISO 8601 start time WITHOUT a Z or offset (e.g. \"2026-04-15T14:00:00\" means 2:00 PM in the user's local timezone), ISO 8601 duration (e.g. \"PT1H\"), optional location, optional calendar name (defaults to \"Personal\"), and optional timezone as an IANA zone name (e.g. \"America/Los_Angeles\", \"Pacific/Honolulu\", \"Asia/Bangkok\"). Timezone defaults to America/Los_Angeles. When the user mentions a city or trip, prefer matching the IANA zone for that location.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -345,6 +363,10 @@ func RegisterFastmailTools(r *Registry, caldavURL, user, password, jmapURL, toke
 				"calendar": {
 					"type": "string",
 					"description": "Calendar name, defaults to \"Personal\""
+				},
+				"timezone": {
+					"type": "string",
+					"description": "IANA timezone name (e.g. \"America/Los_Angeles\", \"Pacific/Honolulu\", \"Asia/Bangkok\"). Defaults to America/Los_Angeles. Use the user's local zone or the destination zone if they're traveling."
 				}
 			},
 			"required": ["title", "start", "duration"]

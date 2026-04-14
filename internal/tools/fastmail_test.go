@@ -157,6 +157,53 @@ func TestFastmailJMAP_DoesNotDoubleBearer(t *testing.T) {
 	require.Equal(t, "Bearer fmu1-alreadyprefixed", authSeen)
 }
 
+// TestFastmailCreateEvent_DefaultsToPacificTimezone verifies that a
+// naive timestamp like "2026-04-15T10:00:00" is interpreted as Pacific
+// time (Leo's local zone) and stored as the correct UTC instant in
+// iCal — NOT as 10:00 UTC, which would render as 03:00 Pacific.
+// Regression: the R1 said "10am", got stored as 03:00 Pacific.
+func TestFastmailCreateEvent_DefaultsToPacificTimezone(t *testing.T) {
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	handler := FastmailCreateEventHandler(srv.URL, "u@fastmail.com", "pw", nil)
+	raw, _ := json.Marshal(fastmailCreateEventInput{
+		Title: "Dentist", Start: "2026-04-15T10:00:00", Duration: "PT1H",
+	})
+	_, err := handler(context.Background(), raw)
+	require.NoError(t, err)
+
+	// April 15, 2026 is in PDT (UTC-7). 10:00 PDT = 17:00 UTC.
+	require.Contains(t, string(capturedBody), "DTSTART:20260415T170000Z")
+}
+
+// TestFastmailCreateEvent_HonorsExplicitTimezone covers the override
+// path: when a caller passes "timezone": "America/New_York", we parse
+// the naive timestamp in that zone instead of the Pacific default.
+func TestFastmailCreateEvent_HonorsExplicitTimezone(t *testing.T) {
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	handler := FastmailCreateEventHandler(srv.URL, "u@fastmail.com", "pw", nil)
+	raw, _ := json.Marshal(map[string]any{
+		"title": "Lunch", "start": "2026-04-15T13:00:00", "duration": "PT1H",
+		"timezone": "America/New_York",
+	})
+	_, err := handler(context.Background(), raw)
+	require.NoError(t, err)
+
+	// April 15, 2026 in EDT (UTC-4). 13:00 EDT = 17:00 UTC.
+	require.Contains(t, string(capturedBody), "DTSTART:20260415T170000Z")
+}
+
 // TestFastmailCreateEvent_UsesDiscoveredCalendarPath verifies that when
 // a calendar-path map is supplied, the display name supplied by Claude
 // is translated into the Fastmail path identifier (e.g. "personal" →
