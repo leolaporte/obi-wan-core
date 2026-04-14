@@ -5,22 +5,23 @@ A unified Go backend that routes voice and text from multiple devices through th
 ## What it does
 
 ```
- Telegram DM ──┐
-                │
- Apple Watch ───┤──▶ Dispatcher ──▶ Anthropic API ──▶ Reply
-                │      ▲                  │
- Rabbit R1 ────┘      │             Tool Loop
-                   history / memory     │
-                   access control   ┌───┴───┐
-                                    │ Tools │
-                                    ├───────┤
-                                    │Obsidian│ file ops
-                                    │Fastmail│ calendar + contacts
-                                    │Spawn  │ claude -p for heavy tasks
-                                    └───────┘
+ Telegram DM ────┐
+                 │
+ Apple Watch ────┤
+                 ├──▶ Dispatcher ──▶ Anthropic API ──▶ Reply
+ Rabbit R1 ──────┤      ▲                  │
+                 │      │             Tool Loop
+ ESP32-S3-BOX ───┘      │                  │
+                   history / memory    ┌───┴───┐
+                   access control      │ Tools │
+                                       ├───────┤
+                                       │Obsidian│ file ops
+                                       │Fastmail│ calendar + contacts
+                                       │Spawn   │ claude -p for heavy tasks
+                                       └────────┘
 ```
 
-You talk to it from your phone, your watch, or a Rabbit R1 — it all goes through the same conversation history with shared memory and per-channel system prompts. Replies route back to the device that sent the message.
+You talk to it from your phone, your watch, a Rabbit R1, or an ESP32-S3-BOX handheld — it all goes through the same conversation history with shared memory and per-channel system prompts. Replies route back to the device that sent the message.
 
 ## Architecture
 
@@ -36,11 +37,12 @@ You talk to it from your phone, your watch, or a Rabbit R1 — it all goes throu
 - **fastmail_search_contacts** — Search contacts via JMAP
 - **spawn_claude_code** — Fire-and-forget background `claude -p` for heavy tasks (research, showprep, code review) with full Claude Code skills and MCP access
 
-**Clients** (`internal/clients/`) — Three input adapters, all feeding the same dispatcher:
+**Clients** (`internal/clients/`) — Four input adapters, all feeding the same dispatcher:
 
 - **Telegram** — Long-poll bot via [go-telegram/bot](https://github.com/go-telegram/bot). Handles message chunking for Telegram's 4096-char limit with rune-safe splitting.
 - **Watch** — HTTP webhook server for Apple Watch dictation (via Shortcuts + Tailscale). Replies echo back to Telegram so you see them on your phone too.
 - **R1** — WebSocket server implementing a subset of the [OpenClaw](https://github.com/nicholasgasior/openclaw) gateway protocol. The R1 connects thinking it's talking to an OpenClaw gateway; we handle QR pairing, ed25519 signature verification, and async message dispatch via the `chat.send` → `chat` event flow (see below).
+- **ESP** — HTTP `/talk` endpoint for the ESP32-S3-BOX-3 handheld. The firmware wakes on "Hi ESP", captures PCM via voice-activity detection, and POSTs the audio; the server runs Whisper STT, dispatches through the core, and returns Piper TTS as a WAV that the BOX plays back through its speaker. Replies mirror into Telegram so there's always a written record, and an optional `notify_url` fires a side-POST to the local Piper server so another machine's speakers can speak the same reply in parallel. Firmware: [leolaporte/esp-box-obi-wan](https://github.com/leolaporte/esp-box-obi-wan).
 
 **Fallback** (`internal/core/fallback.go`) — Multi-tier fallback chain. If the primary Anthropic API fails, falls back to alternate providers (e.g., z.ai GLM, local Ollama).
 
@@ -109,6 +111,18 @@ channels:
     webhook_port: 8200
     bootstrap_token_env: R1_BOOTSTRAP_TOKEN
     device_state_path: ~/.local/state/obi-wan-core/r1-device.json
+
+  esp:
+    enabled: true
+    open_access: true
+    webhook_port: 9090
+    watch_chat_id_env: WATCH_CHAT_ID           # mirror ESP replies into Telegram
+    whisper_url: http://localhost:8002/transcribe
+    piper_url: http://localhost:8888/synthesize
+    piper_voice: main
+    sample_rate: 16000
+    notify_url: http://localhost:8888/notify   # optional: also speak reply locally
+    system_prompt_file: ~/.claude/channels/esp/system-prompt.md
 ```
 
 Secrets are referenced by environment variable name — the binary never reads secret files directly. Works with sops, systemd `EnvironmentFile=`, or any secret injection method you prefer.
@@ -140,6 +154,7 @@ The entire shim is ~2,000 lines including tests. No Docker, no OpenClaw installa
 - For tools: Obsidian vault, Fastmail account (optional)
 - For spawn: [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed (optional)
 - For R1: a Rabbit R1 running r1_escape with OpenClaw gateway support
+- For ESP: an ESP32-S3-BOX-3 running the [esp-box-obi-wan](https://github.com/leolaporte/esp-box-obi-wan) firmware, plus local Whisper and Piper TTS servers on the LAN
 
 ## License
 
