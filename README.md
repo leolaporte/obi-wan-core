@@ -40,7 +40,7 @@ You talk to it from your phone, your watch, or a Rabbit R1 — it all goes throu
 
 - **Telegram** — Long-poll bot via [go-telegram/bot](https://github.com/go-telegram/bot). Handles message chunking for Telegram's 4096-char limit with rune-safe splitting.
 - **Watch** — HTTP webhook server for Apple Watch dictation (via Shortcuts + Tailscale). Replies echo back to Telegram so you see them on your phone too.
-- **R1** — WebSocket server implementing a subset of the [OpenClaw](https://github.com/nicholasgasior/openclaw) gateway protocol. The R1 connects thinking it's talking to an OpenClaw gateway; we handle QR pairing, ed25519 signature verification, and async message dispatch. Round-trip latency is ~1-2 seconds.
+- **R1** — WebSocket server implementing a subset of the [OpenClaw](https://github.com/nicholasgasior/openclaw) gateway protocol. The R1 connects thinking it's talking to an OpenClaw gateway; we handle QR pairing, ed25519 signature verification, and async message dispatch via the `chat.send` → `chat` event flow (see below).
 
 **Fallback** (`internal/core/fallback.go`) — Multi-tier fallback chain. If the primary Anthropic API fails, falls back to alternate providers (e.g., z.ai GLM, local Ollama).
 
@@ -108,6 +108,7 @@ channels:
     enabled: true
     webhook_port: 8200
     bootstrap_token_env: R1_BOOTSTRAP_TOKEN
+    device_state_path: ~/.local/state/obi-wan-core/r1-device.json
 ```
 
 Secrets are referenced by environment variable name — the binary never reads secret files directly. Works with sops, systemd `EnvironmentFile=`, or any secret injection method you prefer.
@@ -116,10 +117,11 @@ Secrets are referenced by environment variable name — the binary never reads s
 
 The Rabbit R1 (running [r1_escape](https://github.com/nicholasgasior/r1_escape) / OS 2) connects to an OpenClaw-compatible gateway over WebSocket. This project implements just enough of that protocol:
 
-1. **QR pairing** — R1 scans a QR code containing the gateway URL. On first connect, it sends a bootstrap token; the server stores the device's ed25519 public key.
-2. **Signature verification** — Subsequent connections are authenticated via signed payloads (v2 format).
-3. **Message routing** — Voice transcripts arrive as `chat.send` method calls, get dispatched through the core as a `Turn`, and replies push back as `chat` events.
-4. **Tick keepalive** — Server sends periodic ticks to keep the connection alive.
+1. **QR pairing** — R1 scans a QR code containing the gateway URL. On first connect, it sends a bootstrap token; the server stores the device's ed25519 public key. Single-device pairing policy: one R1 per shim instance.
+2. **Signature verification** — Subsequent reconnects are authenticated via signed payloads. Both v2 and v3 signature formats are accepted; the `operator` role is allowed alongside `node` because the real R1 firmware reports as operator.
+3. **Async message routing** — Voice transcripts arrive as `chat.send` method calls. The shim returns an immediate `{runId, status:"started"}` ACK, dispatches through the core on a background goroutine (2-minute timeout), and pushes the reply back as a `chat` event with `state:"final"` when done. Errors come back as `chat` events with `state:"error"`.
+4. **Device TTS fallback** — `talk.speak` and `talk.config` return a fallback-eligible `TALK_UNCONFIGURED` error, which tells the R1 firmware to use on-device Android TTS rather than server-side audio.
+5. **Tick keepalive** — Server sends periodic ticks to keep the connection alive. HTTP pre-flight health checks are honored before the WebSocket upgrade.
 
 The entire shim is ~2,000 lines including tests. No Docker, no OpenClaw installation required.
 
