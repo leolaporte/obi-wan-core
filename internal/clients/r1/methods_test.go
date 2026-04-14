@@ -261,6 +261,64 @@ func TestHandleMethod_UnknownMethod(t *testing.T) {
 	}
 }
 
+// TestHandleMethod_TalkSpeakReturnsFallbackEligibleError verifies the
+// shim returns a TALK_UNCONFIGURED error with fallbackEligible=true so the
+// R1 firmware falls back to on-device Android TTS rather than expecting
+// server-side audio.
+func TestHandleMethod_TalkSpeakReturnsFallbackEligibleError(t *testing.T) {
+	m := NewMethodHandler(MethodHandlerConfig{
+		Dispatcher: newFakeDispatcher("", nil), Channel: "r1", DeviceID: "dev-1",
+	})
+	payload, errShape := m.Handle(context.Background(), MethodTalkSpeak, json.RawMessage(`{"text":"hello"}`))
+	if payload != nil {
+		t.Errorf("expected nil payload, got %s", string(payload))
+	}
+	if errShape == nil {
+		t.Fatal("expected ErrorShape, got nil")
+	}
+	if errShape.Code != "TALK_UNCONFIGURED" {
+		t.Errorf("expected code TALK_UNCONFIGURED, got %q", errShape.Code)
+	}
+	if errShape.Details == nil {
+		t.Fatal("expected details set")
+	}
+	var details map[string]any
+	if err := json.Unmarshal(errShape.Details, &details); err != nil {
+		t.Fatalf("parse details: %v", err)
+	}
+	if details["fallbackEligible"] != true {
+		t.Errorf("expected fallbackEligible=true, got %v", details["fallbackEligible"])
+	}
+	if details["reason"] != "talk_unconfigured" {
+		t.Errorf("expected reason=talk_unconfigured, got %v", details["reason"])
+	}
+}
+
+// TestHandleMethod_TalkConfigReturnsUnconfigured verifies the shim
+// advertises no TTS provider so the R1 defers to device-local TTS.
+func TestHandleMethod_TalkConfigReturnsUnconfigured(t *testing.T) {
+	m := NewMethodHandler(MethodHandlerConfig{
+		Dispatcher: newFakeDispatcher("", nil), Channel: "r1", DeviceID: "dev-1",
+	})
+	payload, errShape := m.Handle(context.Background(), MethodTalkConfig, json.RawMessage(`{}`))
+	if errShape != nil {
+		t.Fatalf("unexpected error: %+v", errShape)
+	}
+	var got struct {
+		Config struct {
+			Talk struct {
+				Provider string `json:"provider"`
+			} `json:"talk"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatalf("parse payload: %v", err)
+	}
+	if got.Config.Talk.Provider != "" {
+		t.Errorf("expected empty provider, got %q", got.Config.Talk.Provider)
+	}
+}
+
 // Silence unused warning if test is edited down in the future.
 var _ = errors.New
 var _ = time.Now
