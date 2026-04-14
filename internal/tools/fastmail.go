@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -78,6 +80,8 @@ func truncateStr(s string, n int) string {
 // --- JMAP helper ---
 
 // doJMAP posts a JMAP request and returns successMsg on HTTP 200, or an error string.
+// Ensures the Authorization header carries a "Bearer " prefix; Fastmail API tokens
+// come from the environment raw (e.g. "fmu1-..."), without the prefix.
 func doJMAP(ctx context.Context, jmapURL, token string, body any, successMsg string) (string, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -89,16 +93,25 @@ func doJMAP(ctx context.Context, jmapURL, token string, body any, successMsg str
 		return "", fmt.Errorf("building JMAP request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", token)
+	authHeader := token
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		authHeader = "Bearer " + authHeader
+	}
+	req.Header.Set("Authorization", authHeader)
+
+	slog.Info("fastmail jmap request", "url", jmapURL)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		slog.Warn("fastmail jmap transport error", "err", err)
 		return fmt.Sprintf("error: JMAP request failed: %v", err), nil
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
+	slog.Info("fastmail jmap response", "status", resp.StatusCode, "bytes", len(respBody))
 	if resp.StatusCode != http.StatusOK {
+		slog.Warn("fastmail jmap non-200", "status", resp.StatusCode, "body", truncateStr(string(respBody), 200))
 		return fmt.Sprintf("error: JMAP returned %d: %s", resp.StatusCode, truncateStr(string(respBody), 200)), nil
 	}
 
@@ -110,15 +123,33 @@ func doJMAP(ctx context.Context, jmapURL, token string, body any, successMsg str
 
 // --- Handlers ---
 
+// resolveCalendarPath maps the user-facing calendar name to the path
+// segment Fastmail expects. Fastmail's CalDAV uses internal identifiers
+// (e.g. "Default", or a hex GUID) — not display names — in the URL path.
+// If discovery ran at startup and found a matching display name
+// (case-insensitive), we use the discovered path. Otherwise we pass
+// through whatever Claude supplied, which lets users explicitly name a
+// known path and also preserves the old behavior.
+func resolveCalendarPath(requested string, discovered map[string]string) string {
+	if discovered != nil {
+		if path, ok := discovered[strings.ToLower(requested)]; ok {
+			return path
+		}
+	}
+	return requested
+}
+
 // FastmailCreateEventHandler returns a HandlerFunc that creates a calendar event via CalDAV PUT.
-func FastmailCreateEventHandler(caldavURL, user, password string) HandlerFunc {
+// calendarPaths is an optional display-name → path map (keys lowercased)
+// discovered via PROPFIND at startup. Pass nil to disable lookup.
+func FastmailCreateEventHandler(caldavURL, user, password string, calendarPaths map[string]string) HandlerFunc {
 	return func(ctx context.Context, raw json.RawMessage) (string, error) {
 		var in fastmailCreateEventInput
 		if err := json.Unmarshal(raw, &in); err != nil {
 			return "", fmt.Errorf("invalid input: %w", err)
 		}
 		if in.Calendar == "" {
-			in.Calendar = "Personal"
+			in.Calendar = "Default"
 		}
 
 		start, err := time.Parse("2006-01-02T15:04:05", in.Start)
@@ -129,7 +160,10 @@ func FastmailCreateEventHandler(caldavURL, user, password string) HandlerFunc {
 		uid := newUUID() + "@obi-wan-core"
 		ical := buildVCalendar(uid, in.Title, in.Location, start, in.Duration)
 
-		url := fmt.Sprintf("%s/dav/calendars/user/%s/%s/%s.ics", caldavURL, user, in.Calendar, uid)
+		calPath := resolveCalendarPath(in.Calendar, calendarPaths)
+		url := fmt.Sprintf("%s/dav/calendars/user/%s/%s/%s.ics", caldavURL, user, calPath, uid)
+
+		slog.Info("fastmail caldav PUT", "calendar_requested", in.Calendar, "calendar_path", calPath, "title", in.Title, "start", in.Start)
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, strings.NewReader(ical))
 		if err != nil {
@@ -140,15 +174,18 @@ func FastmailCreateEventHandler(caldavURL, user, password string) HandlerFunc {
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
+			slog.Warn("fastmail caldav transport error", "err", err)
 			return fmt.Sprintf("error: CalDAV request failed: %v", err), nil
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusNoContent {
+			slog.Info("fastmail caldav created", "status", resp.StatusCode, "title", in.Title)
 			return fmt.Sprintf("Event created: %s on %s", in.Title, start.Format("Jan 2, 2006 at 3:04 PM")), nil
 		}
 
 		body, _ := io.ReadAll(resp.Body)
+		slog.Warn("fastmail caldav non-2xx", "status", resp.StatusCode, "calendar_path", calPath, "body", truncateStr(string(body), 200))
 		return fmt.Sprintf("error: CalDAV returned %d: %s", resp.StatusCode, truncateStr(string(body), 200)), nil
 	}
 }
@@ -259,7 +296,9 @@ func FastmailSearchContactsHandler(jmapURL, token string) HandlerFunc {
 }
 
 // RegisterFastmailTools registers all three Fastmail tools with the registry.
-func RegisterFastmailTools(r *Registry, caldavURL, user, password, jmapURL, token string) {
+// calendarPaths is an optional display-name → path map (lowercased keys)
+// discovered via DiscoverCalendars; pass nil to skip the lookup layer.
+func RegisterFastmailTools(r *Registry, caldavURL, user, password, jmapURL, token string, calendarPaths map[string]string) {
 	r.Register(Tool{
 		Name:        "fastmail_create_event",
 		Description: "Create a calendar event in Fastmail via CalDAV. Provide a title, ISO 8601 start time (e.g. \"2026-04-15T14:00:00\"), ISO 8601 duration (e.g. \"PT1H\"), optional location, and optional calendar name (defaults to \"Personal\").",
@@ -289,7 +328,7 @@ func RegisterFastmailTools(r *Registry, caldavURL, user, password, jmapURL, toke
 			},
 			"required": ["title", "start", "duration"]
 		}`),
-		Handler: FastmailCreateEventHandler(caldavURL, user, password),
+		Handler: FastmailCreateEventHandler(caldavURL, user, password, calendarPaths),
 	})
 
 	r.Register(Tool{
@@ -339,4 +378,91 @@ func RegisterFastmailTools(r *Registry, caldavURL, user, password, jmapURL, toke
 		}`),
 		Handler: FastmailSearchContactsHandler(jmapURL, token),
 	})
+}
+
+// --- CalDAV calendar discovery ---
+
+// caldavPROPFIND represents the subset of the CalDAV PROPFIND multistatus
+// response we need: for each <response>, we want the <href> (path) and
+// the <displayname> property. Fastmail's CalDAV collection listing under
+// /dav/calendars/user/<user>/ returns one response per calendar.
+type caldavPROPFIND struct {
+	XMLName   xml.Name            `xml:"multistatus"`
+	Responses []caldavPROPFINDRsp `xml:"response"`
+}
+
+type caldavPROPFINDRsp struct {
+	Href     string `xml:"href"`
+	Propstat []struct {
+		Prop struct {
+			DisplayName string `xml:"displayname"`
+		} `xml:"prop"`
+		Status string `xml:"status"`
+	} `xml:"propstat"`
+}
+
+const caldavPropfindBody = `<?xml version="1.0" encoding="utf-8" ?>
+<D:propfind xmlns:D="DAV:">
+  <D:prop><D:displayname/></D:prop>
+</D:propfind>`
+
+// DiscoverCalendars issues a depth-1 PROPFIND against Fastmail's calendar
+// collection for the given user and returns a map of lowercased display
+// name to the path segment (e.g. "personal" → "Default" or a hex GUID).
+// Call this once at startup; pass the result to RegisterFastmailTools so
+// FastmailCreateEventHandler can translate Claude's calendar names into
+// paths Fastmail actually recognizes.
+func DiscoverCalendars(ctx context.Context, caldavURL, user, password string) (map[string]string, error) {
+	baseURL := fmt.Sprintf("%s/dav/calendars/user/%s/", caldavURL, user)
+	req, err := http.NewRequestWithContext(ctx, "PROPFIND", baseURL, strings.NewReader(caldavPropfindBody))
+	if err != nil {
+		return nil, fmt.Errorf("build PROPFIND: %w", err)
+	}
+	req.Header.Set("Depth", "1")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	req.SetBasicAuth(user, password)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("PROPFIND transport: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	// CalDAV returns 207 Multi-Status on success.
+	if resp.StatusCode != http.StatusMultiStatus && resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("PROPFIND returned %d: %s", resp.StatusCode, truncateStr(string(body), 200))
+	}
+
+	var parsed caldavPROPFIND
+	if err := xml.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("parse PROPFIND: %w", err)
+	}
+
+	out := make(map[string]string)
+	userPrefix := fmt.Sprintf("/dav/calendars/user/%s/", user)
+	for _, r := range parsed.Responses {
+		// Skip the parent collection itself (href == userPrefix) and any
+		// response without a displayname property populated (e.g. the
+		// outbox/inbox collections that Fastmail doesn't name).
+		href := r.Href
+		if !strings.HasPrefix(href, userPrefix) || href == userPrefix {
+			continue
+		}
+		pathSegment := strings.TrimSuffix(strings.TrimPrefix(href, userPrefix), "/")
+		if pathSegment == "" {
+			continue
+		}
+		var name string
+		for _, ps := range r.Propstat {
+			if ps.Prop.DisplayName != "" {
+				name = ps.Prop.DisplayName
+				break
+			}
+		}
+		if name == "" {
+			continue
+		}
+		out[strings.ToLower(name)] = pathSegment
+	}
+	return out, nil
 }

@@ -246,10 +246,34 @@ func buildDispatcherWithConfig(cfgPath string) (*core.Dispatcher, *config.Config
 		if cfg.FastmailPasswordEnv != "" {
 			fmPassword = os.Getenv(cfg.FastmailPasswordEnv)
 		}
+		caldavURL := "https://caldav.fastmail.com"
+
+		// Discover real calendar path identifiers so Claude's "Personal"
+		// resolves to whatever Fastmail actually uses (e.g. "Default" or
+		// a GUID). Non-fatal: if discovery fails the map stays nil and
+		// the handler passes the display name through.
+		var calendarPaths map[string]string
+		if fmPassword != "" && cfg.FastmailUser != "" {
+			discoverCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			paths, err := tools.DiscoverCalendars(discoverCtx, caldavURL, cfg.FastmailUser, fmPassword)
+			cancel()
+			if err != nil {
+				slog.Warn("fastmail calendar discovery failed; calendar names will be passed through raw", "err", err)
+			} else {
+				calendarPaths = paths
+				names := make([]string, 0, len(paths))
+				for n := range paths {
+					names = append(names, n)
+				}
+				slog.Info("fastmail calendars discovered", "count", len(paths), "names", names)
+			}
+		}
+
 		tools.RegisterFastmailTools(registry,
-			"https://caldav.fastmail.com",
+			caldavURL,
 			cfg.FastmailUser, fmPassword,
 			"https://api.fastmail.com/jmap/api/", fmToken,
+			calendarPaths,
 		)
 		slog.Info("fastmail tools registered")
 	}
