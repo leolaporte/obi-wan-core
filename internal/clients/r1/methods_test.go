@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,70 +12,182 @@ import (
 )
 
 type fakeDispatcher struct {
+	mu       sync.Mutex
 	lastTurn core.Turn
 	reply    string
 	err      error
+	done     chan struct{}
+}
+
+func newFakeDispatcher(reply string, err error) *fakeDispatcher {
+	return &fakeDispatcher{reply: reply, err: err, done: make(chan struct{}, 1)}
 }
 
 func (f *fakeDispatcher) Dispatch(ctx context.Context, turn core.Turn) (*core.Reply, error) {
+	f.mu.Lock()
 	f.lastTurn = turn
+	f.mu.Unlock()
+	defer func() {
+		select {
+		case f.done <- struct{}{}:
+		default:
+		}
+	}()
 	if f.err != nil {
 		return nil, f.err
 	}
 	return &core.Reply{Text: f.reply}, nil
 }
 
+func (f *fakeDispatcher) waitForDispatch(t *testing.T) core.Turn {
+	t.Helper()
+	select {
+	case <-f.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("dispatcher never called")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastTurn
+}
+
+type chatEvent struct {
+	name    string
+	payload map[string]any
+}
+
+func newChatCollector(buf int) (EventPusher, <-chan chatEvent) {
+	ch := make(chan chatEvent, buf)
+	push := func(event string, payload any) {
+		m, _ := payload.(map[string]any)
+		ch <- chatEvent{name: event, payload: m}
+	}
+	return push, ch
+}
+
+func waitChat(t *testing.T, ch <-chan chatEvent) chatEvent {
+	t.Helper()
+	select {
+	case ev := <-ch:
+		return ev
+	case <-time.After(2 * time.Second):
+		t.Fatal("no chat event pushed")
+		return chatEvent{}
+	}
+}
+
+// TestHandleMethod_SessionsSend verifies the async contract: immediate
+// {runId, status:"started"} ACK synchronously, then a final "chat" event
+// carrying the reply text once the dispatcher completes.
 func TestHandleMethod_SessionsSend(t *testing.T) {
-	d := &fakeDispatcher{reply: "hello back"}
+	d := newFakeDispatcher("hello back", nil)
+	push, events := newChatCollector(2)
 	m := NewMethodHandler(MethodHandlerConfig{
 		Dispatcher: d,
 		Channel:    "r1",
 		DeviceID:   "dev-1",
+		PushEvent:  push,
 	})
-	params := json.RawMessage(`{"text":"hello"}`)
+	params := json.RawMessage(`{"text":"hello","idempotencyKey":"idem-1","sessionKey":"sess-a"}`)
 	payload, errShape := m.Handle(context.Background(), MethodSessionsSend, params)
 	if errShape != nil {
 		t.Fatalf("handler errored: %+v", errShape)
 	}
-	if d.lastTurn.Channel != "r1" || d.lastTurn.UserID != "dev-1" || d.lastTurn.Message != "hello" {
-		t.Errorf("bad turn: %+v", d.lastTurn)
+
+	// ACK is synchronous and carries runId + status=started.
+	var ack map[string]any
+	if err := json.Unmarshal(payload, &ack); err != nil {
+		t.Fatalf("ack: %v", err)
 	}
-	// Payload should carry the reply text.
-	var got map[string]any
-	if err := json.Unmarshal(payload, &got); err != nil {
-		t.Fatalf("payload: %v", err)
+	if ack["status"] != "started" {
+		t.Errorf("expected status=started, got %v", ack["status"])
 	}
-	if got["text"] != "hello back" {
-		t.Errorf("bad payload: %+v", got)
+	if ack["runId"] != "idem-1" {
+		t.Errorf("expected runId=idem-1, got %v", ack["runId"])
+	}
+
+	// Dispatcher must be called with the Turn fields wired through.
+	turn := d.waitForDispatch(t)
+	if turn.Channel != "r1" || turn.UserID != "dev-1" || turn.Message != "hello" {
+		t.Errorf("bad turn: %+v", turn)
+	}
+
+	// A final chat event should arrive with the reply text.
+	ev := waitChat(t, events)
+	if ev.name != "chat" {
+		t.Fatalf("expected 'chat' event, got %q", ev.name)
+	}
+	if ev.payload["state"] != "final" {
+		t.Errorf("expected state=final, got %v", ev.payload["state"])
+	}
+	msg, _ := ev.payload["message"].(map[string]any)
+	content, _ := msg["content"].([]map[string]any)
+	if len(content) == 0 {
+		t.Fatalf("no content in chat event: %+v", ev.payload)
+	}
+	if content[0]["text"] != "hello back" {
+		t.Errorf("expected reply text in chat event, got %+v", content[0])
 	}
 }
 
 func TestHandleMethod_ChatSendAliasesSessionsSend(t *testing.T) {
-	d := &fakeDispatcher{reply: "pong"}
+	d := newFakeDispatcher("pong", nil)
+	push, events := newChatCollector(2)
 	m := NewMethodHandler(MethodHandlerConfig{
-		Dispatcher: d, Channel: "r1", DeviceID: "dev-1",
+		Dispatcher: d, Channel: "r1", DeviceID: "dev-1", PushEvent: push,
 	})
 	payload, errShape := m.Handle(context.Background(), MethodChatSend, json.RawMessage(`{"text":"ping"}`))
 	if errShape != nil {
 		t.Fatalf("chat.send: %+v", errShape)
 	}
-	if d.lastTurn.Message != "ping" {
-		t.Errorf("dispatcher not called: %+v", d.lastTurn)
-	}
 	if payload == nil {
-		t.Error("expected non-nil payload")
+		t.Error("expected non-nil ack")
+	}
+	turn := d.waitForDispatch(t)
+	if turn.Message != "ping" {
+		t.Errorf("dispatcher not called with ping: %+v", turn)
+	}
+	if ev := waitChat(t, events); ev.payload["state"] != "final" {
+		t.Errorf("expected final state, got %v", ev.payload["state"])
 	}
 }
 
+// TestHandleMethod_AccessDenied verifies that a dispatcher error surfaces as
+// an async chat event with state=error (not a synchronous ErrorShape — the
+// sync response has already ACKed with status=started by then).
 func TestHandleMethod_AccessDenied(t *testing.T) {
-	d := &fakeDispatcher{err: core.ErrAccessDenied}
+	d := newFakeDispatcher("", core.ErrAccessDenied)
+	push, events := newChatCollector(2)
+	m := NewMethodHandler(MethodHandlerConfig{
+		Dispatcher: d, Channel: "r1", DeviceID: "dev-1", PushEvent: push,
+	})
+	_, errShape := m.Handle(context.Background(), MethodSessionsSend, json.RawMessage(`{"text":"x"}`))
+	if errShape != nil {
+		t.Fatalf("sync ACK should not error: %+v", errShape)
+	}
+	ev := waitChat(t, events)
+	if ev.payload["state"] != "error" {
+		t.Errorf("expected state=error, got %v", ev.payload["state"])
+	}
+	if ev.payload["errorMessage"] == "" || ev.payload["errorMessage"] == nil {
+		t.Errorf("expected errorMessage set, got %v", ev.payload["errorMessage"])
+	}
+}
+
+// TestHandleMethod_SendWithoutPushEvent ensures the async goroutine does not
+// panic when PushEvent is not wired (smoke test — real connections always
+// wire one, but defensive callers shouldn't crash the process).
+func TestHandleMethod_SendWithoutPushEvent(t *testing.T) {
+	d := newFakeDispatcher("ok", nil)
 	m := NewMethodHandler(MethodHandlerConfig{
 		Dispatcher: d, Channel: "r1", DeviceID: "dev-1",
 	})
-	_, errShape := m.Handle(context.Background(), MethodSessionsSend, json.RawMessage(`{"text":"x"}`))
-	if errShape == nil || errShape.Code != ErrCodeUnauthorized {
-		t.Fatalf("want UNAUTHORIZED, got %+v", errShape)
+	if _, errShape := m.Handle(context.Background(), MethodSessionsSend, json.RawMessage(`{"text":"hi"}`)); errShape != nil {
+		t.Fatalf("unexpected error: %+v", errShape)
 	}
+	d.waitForDispatch(t)
+	// Give the goroutine a beat to return past the nil push.
+	time.Sleep(10 * time.Millisecond)
 }
 
 func TestHandleMethod_EmptyText(t *testing.T) {

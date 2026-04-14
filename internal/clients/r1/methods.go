@@ -118,8 +118,13 @@ func (m *MethodHandler) handleSend(ctx context.Context, raw json.RawMessage) (js
 			Message:    text,
 			ReceivedAt: time.Now(),
 		})
+		push := m.cfg.PushEvent
+		if push == nil {
+			slog.Warn("r1 chat.send completed without PushEvent wired; dropping result", "runId", runID, "err", err)
+			return
+		}
 		if err != nil {
-			m.cfg.PushEvent("chat", map[string]any{
+			push("chat", map[string]any{
 				"runId":        runID,
 				"sessionKey":   sessionKey,
 				"seq":          1,
@@ -128,7 +133,7 @@ func (m *MethodHandler) handleSend(ctx context.Context, raw json.RawMessage) (js
 			})
 			return
 		}
-		m.cfg.PushEvent("chat", map[string]any{
+		push("chat", map[string]any{
 			"runId":      runID,
 			"sessionKey": sessionKey,
 			"seq":        0,
